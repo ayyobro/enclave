@@ -4,6 +4,8 @@ Secure, end-to-end encrypted chat for developers. Fully on-prem. Zero cloud depe
 
 Enclave is a TUI (terminal UI) chat application that runs in your terminal alongside your editor and tools. The server only routes opaque encrypted blobs — messages are encrypted client-side using NaCl box (X25519 + XSalsa20-Poly1305) and the server never sees plaintext. Everything runs on your own hardware. One binary, no accounts, no cloud.
 
+https://github.com/user-attachments/assets/6026aebc-a610-4a26-947b-d703c4f3d75c
+
 ## Features
 
 ### Core
