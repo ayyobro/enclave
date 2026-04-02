@@ -23,7 +23,7 @@ type ReconnectingMsg struct {
 
 // ContactInfo represents a known contact or group for display.
 type ContactInfo struct {
-	PublicKey    string // public key for DMs, group ID for groups
+	PublicKey   string // public key for DMs, group ID for groups
 	DisplayName string
 	Online      bool
 	IsGroup     bool
@@ -62,6 +62,12 @@ type TypingClearTickMsg struct{}
 
 // EphemeralTickMsg fires periodically to purge expired ephemeral messages.
 type EphemeralTickMsg struct{}
+
+// VibeOutputLocalMsg carries output from the local Claude Code subprocess.
+type VibeOutputLocalMsg struct {
+	Text   string
+	IsDone bool
+}
 
 // FocusPane identifies which pane has focus.
 type FocusPane int

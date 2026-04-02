@@ -19,7 +19,7 @@ import (
 
 // ChatMessage represents a single rendered message in the chat.
 type ChatMessage struct {
-	DBMessageID int64  // local database ID for reactions/pins
+	DBMessageID int64 // local database ID for reactions/pins
 	From        string
 	FromName    string
 	Text        string

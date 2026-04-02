@@ -1,0 +1,44 @@
+# Binaries
+build/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*.test
+*.out
+coverage.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Enclave data (never commit secrets)
+*.key
+*.crt
+*.db
+*.log
+admin.key
+identity.key
+identity.pub
+server.key
+server.pub
+server-tls.key
+ssh_host_key
+enclave-server.db
+messages.db
+
+# Config with secrets
+config.toml
+
+# Local test data
+/tmp/

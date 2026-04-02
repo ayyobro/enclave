@@ -16,6 +16,7 @@ Enclave is a TUI (terminal UI) chat application that runs in your terminal along
 - **Offline delivery** — Messages queue on the server when recipients are offline
 
 ### Developer Experience
+- **Collaborative AI coding (`/vibe2gether`)** — Start a shared Claude Code session from within the chat. Participants send `@claude` prompts, the host's machine runs them, and output streams to everyone in real-time. Host approves or rejects remote prompts before execution. All communication E2E encrypted
 - **Rich TUI** — Split-pane interface with contacts, chat viewport, input, and status bar
 - **Syntax highlighting** — Fenced code blocks render with full syntax highlighting (200+ languages via Chroma)
 - **Inline code** — Backtick-wrapped `code` renders with a distinct background
@@ -52,58 +53,218 @@ Enclave is a TUI (terminal UI) chat application that runs in your terminal along
 
 ## Quick Start
 
-### 1. Build
+### Build
 
 ```bash
 git clone <repo-url> && cd enclave
 make build
 ```
 
-### 2. Start the server
+Pick a deployment option below based on your setup.
+
+---
+
+### Option A: Local Network (LAN testing)
+
+For testing on your home network or with teammates in the same office.
+
+**1. Start the server**
 
 ```bash
 ./build/enclave serve --bind 0.0.0.0:9300 --data-dir ./server-data
 ```
 
-The server prints an **admin key** on startup — this is used to generate invite tokens. It's saved to `server-data/admin.key` and persists across restarts.
+Note the **admin key** printed on startup.
 
-### 3. Generate invite tokens
-
-From any machine that can reach the server:
+**2. Generate invite tokens**
 
 ```bash
-./build/enclave invite --server 192.168.1.50:9300 --admin-key <admin-key>
+./build/enclave invite --server <your-lan-ip>:9300 --admin-key <admin-key>
 ```
 
-Share the printed token with each person you want to invite out-of-band (in person, phone call, etc). Tokens are one-time use and expire after 72 hours by default.
-
-### 4. Users initialize and register
-
-Each user runs:
+**3. Each user registers and chats**
 
 ```bash
-./build/enclave init --display-name alice --server 192.168.1.50:9300 --token <invite-token>
-```
-
-This generates their X25519 keypair, registers their public key with the server, and saves config to `~/.enclave/`. Registration happens during `init` — users don't need the token again.
-
-### 5. Chat
-
-```bash
+./build/enclave init --display-name alice --server <your-lan-ip>:9300 --token <token>
 ./build/enclave chat
 ```
 
-Use `Tab` to switch between the contact sidebar, chat viewport, and message input. Type `/` for the command palette.
-
-### Local testing
-
-To test with two users locally:
+**Quick local test with two users:**
 
 ```bash
 ./scripts/local-test.sh
 ```
 
-This starts a server, generates two invite tokens, registers alice and bob, and prints the commands to open their chat sessions in separate terminals.
+---
+
+### Option B: Tailscale (recommended for remote teams)
+
+The easiest way to chat across locations. Tailscale creates a private WireGuard mesh network — no port forwarding, no public IP exposure, no firewall rules. Free for personal use.
+
+**1. Install Tailscale on all machines**
+
+```bash
+# Linux
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# macOS
+brew install tailscale
+
+# Windows
+# Download from https://tailscale.com/download
+```
+
+**2. Start the server on any machine in your tailnet**
+
+```bash
+# Find your Tailscale IP
+tailscale ip -4
+# Example: 100.64.0.1
+
+./build/enclave serve --bind 0.0.0.0:9300 --data-dir ./server-data --tls
+```
+
+**3. Generate invite tokens**
+
+```bash
+./build/enclave invite --server 100.64.0.1:9300 --admin-key <admin-key> --tls
+```
+
+**4. Each user on the tailnet registers and chats**
+
+```bash
+./build/enclave init --display-name alice --server 100.64.0.1:9300 --tls --token <token>
+./build/enclave chat
+```
+
+That's it. Tailscale handles all the networking. Traffic is encrypted by WireGuard (network layer) on top of Enclave's E2E encryption (application layer). The server can run on a Raspberry Pi, an old laptop, or any machine you control.
+
+---
+
+### Option C: Hardened VPS (always-on, accessible from anywhere)
+
+For a dedicated server that's always reachable. This example uses DigitalOcean but works with any VPS provider (Hetzner, Linode, Vultr, etc).
+
+**1. Create a VPS**
+
+- DigitalOcean: Create a $6/mo droplet (1 vCPU, 1GB RAM, Ubuntu 24.04)
+- Or Hetzner: Create a €3.79/mo CX22 (2 vCPU, 4GB RAM)
+
+**2. Harden the server**
+
+```bash
+# SSH into your VPS
+ssh root@<vps-ip>
+
+# Create a non-root user
+adduser enclave
+usermod -aG sudo enclave
+
+# Disable root SSH login
+sed -i 's/PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+systemctl restart sshd
+
+# Set up firewall — only allow SSH and Enclave
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp    # SSH
+ufw allow 9300/tcp  # Enclave
+ufw enable
+
+# Automatic security updates
+apt install -y unattended-upgrades
+dpkg-reconfigure -plow unattended-upgrades
+```
+
+**3. Install and run Enclave**
+
+```bash
+# Switch to the enclave user
+su - enclave
+
+# Download or build the binary
+# Option A: Build from source
+sudo apt install -y golang-go git
+git clone <repo-url> && cd enclave
+make build
+
+# Option B: Download a release binary
+# curl -L <release-url> -o enclave && chmod +x enclave
+
+# Create data directory
+mkdir -p ~/enclave-data
+
+# Start with TLS enabled
+./build/enclave serve --bind 0.0.0.0:9300 --data-dir ~/enclave-data --tls
+```
+
+**4. Run as a systemd service (auto-start on boot)**
+
+```bash
+sudo tee /etc/systemd/system/enclave.service > /dev/null <<EOF
+[Unit]
+Description=Enclave Chat Server
+After=network.target
+
+[Service]
+Type=simple
+User=enclave
+WorkingDirectory=/home/enclave/enclave
+ExecStart=/home/enclave/enclave/build/enclave serve --bind 0.0.0.0:9300 --data-dir /home/enclave/enclave-data --tls
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable enclave
+sudo systemctl start enclave
+
+# Check status
+sudo systemctl status enclave
+
+# View logs
+sudo journalctl -u enclave -f
+```
+
+**5. Generate invites and connect**
+
+From your local machine:
+
+```bash
+./build/enclave invite --server <vps-ip>:9300 --admin-key <admin-key> --tls
+```
+
+Each user:
+
+```bash
+./build/enclave init --display-name alice --server <vps-ip>:9300 --tls --token <token>
+./build/enclave chat
+```
+
+**VPS security notes:**
+- TLS is mandatory for VPS deployments — always use `--tls`
+- The server only sees encrypted blobs — even on a VPS you don't fully trust, message content is safe
+- The admin key is stored on the VPS at `enclave-data/admin.key` — protect it like a password
+- Consider adding fail2ban for SSH: `apt install fail2ban`
+- For extra security, combine with Tailscale: run the VPS on your tailnet and bind to the Tailscale IP instead of `0.0.0.0`
+
+---
+
+### Choosing a deployment
+
+| | LAN | Tailscale | VPS |
+|---|---|---|---|
+| **Cost** | Free | Free (personal) | $4-6/mo |
+| **Setup** | 1 minute | 5 minutes | 15 minutes |
+| **Always on** | Only when your machine is on | Only when host machine is on | Yes |
+| **Remote access** | Same network only | Anywhere with Tailscale | Anywhere |
+| **Port forwarding** | No | No | No |
+| **Public IP needed** | No | No | Yes (VPS has one) |
+| **Security layers** | E2E encryption | E2E + WireGuard | E2E + TLS |
 
 ## CLI Reference
 
@@ -184,6 +345,8 @@ Type `/` in the message input to see all available commands with fuzzy autocompl
 | `/pin` | Pin the last message. Pinned messages show a pin indicator |
 | `/pins` | List all pinned messages in the current conversation |
 | `/ephemeral <duration>` | Enable disappearing messages — both sides are notified and messages are deleted from both databases after the timer. Accepts Go durations: `30s`, `5m`, `1h`. Use `/ephemeral off` to disable |
+| `/vibe2gether <path>` | Start a collaborative Claude Code session on a local repo. Others can send `@claude` prompts. Host approves/rejects remote prompts before execution |
+| `/endvibe` | End the active collaborative coding session |
 | `/export` | Save the current conversation to `~/.enclave/exports/` as a text file |
 | `/quit` | Exit Enclave |
 
@@ -262,6 +425,101 @@ enclave chat --theme dracula
 ### Group chat encryption
 
 Group messages are encrypted per-recipient. When you send to a group, the client encrypts the plaintext separately with each member's public key (NaCl box). The server receives one envelope containing all recipient-specific ciphertexts and fans it out to each member. Each member decrypts only their own ciphertext using their private key and the sender's public key.
+
+## Collaborative Coding (`/vibe2gether`)
+
+Enclave includes a built-in multiplayer Claude Code experience — the first tool to combine E2E encrypted chat with collaborative AI-assisted coding.
+
+### How it works
+
+```
+┌─────────────────────┐          ┌─────────────────────┐
+│  alice (host)        │          │  bob (participant)   │
+│                      │          │                      │
+│  enclave chat        │◄────────►│  enclave chat        │
+│       │              │ encrypted│                      │
+│       ▼              │          │  types:              │
+│  claude code         │          │  @claude add tests   │
+│  (subprocess)        │          │                      │
+│       │              │          │  sees:               │
+│       ▼              │          │  [reading main.go]   │
+│  local git repo      │          │  [writing test.go]   │
+│  (files modified)    │          │  "Here are the tests"│
+└─────────────────────┘          └─────────────────────┘
+```
+
+### Starting a session
+
+```
+alice> /vibe2gether ~/projects/my-api
+🎸 Collaborative coding session started on: my-api
+   Others can now use @claude <prompt> to send prompts.
+   Use /endvibe to stop.
+```
+
+Bob sees:
+```
+🎸 alice started a collaborative coding session on: my-api
+   Use @claude <prompt> to send prompts.
+```
+
+### Sending prompts
+
+Anyone in the conversation can type `@claude` followed by a prompt:
+
+```
+bob> @claude add a health check endpoint
+```
+
+### Host approval
+
+When a remote participant sends a prompt, the host sees an approval request:
+
+```
+🔒 bob wants to run:
+   @claude add a health check endpoint
+
+   Press [y] to approve or [n] to reject
+```
+
+The host's own `@claude` prompts run immediately — no approval needed for your own machine.
+
+### Output streaming
+
+Once approved, Claude Code runs on the host's machine and output streams to all participants:
+
+```
+claude · 14:32
+[reading main.go]
+
+claude · 14:32
+[writing internal/health.go]
+
+claude · 14:33
+Here's the health check endpoint. I've added...
+```
+
+Tool calls (file reads, edits, bash commands) appear as status lines. The final response appears as a regular chat message with full syntax highlighting.
+
+### Ending a session
+
+```
+alice> /endvibe
+🎸 Collaborative coding session ended.
+```
+
+### Security model
+
+- Claude Code runs **only on the host's machine** — no one else gets shell access
+- All prompts and output flow through Enclave's **E2E encryption**
+- Remote prompts require **explicit host approval** before execution
+- The server sees nothing — prompts and output are encrypted blobs
+- Host opts in with `--dangerously-skip-permissions` (required for non-interactive Claude Code)
+
+### Requirements
+
+- [Claude Code CLI](https://claude.ai/claude-code) must be installed on the host's machine
+- The host must be authenticated with Claude Code (`claude` command works)
 
 ## Encryption
 

@@ -125,12 +125,12 @@ type GroupLeaveMsg struct {
 // GroupChatMsg carries an encrypted message to a group.
 // The sender encrypts the plaintext once per recipient.
 type GroupChatMsg struct {
-	Type       string              `json:"type"`
-	From       string              `json:"from,omitempty"`
-	GroupID    string              `json:"group_id"`
+	Type       string               `json:"type"`
+	From       string               `json:"from,omitempty"`
+	GroupID    string               `json:"group_id"`
 	Recipients []GroupChatRecipient `json:"recipients"`
-	ID         int64               `json:"id,omitempty"`
-	Timestamp  int64               `json:"ts,omitempty"`
+	ID         int64                `json:"id,omitempty"`
+	Timestamp  int64                `json:"ts,omitempty"`
 }
 
 // GroupChatRecipient holds the per-recipient encrypted payload.
@@ -152,21 +152,21 @@ type ReadReceiptMsg struct {
 type ReactionMsg struct {
 	Type      string `json:"type"`
 	From      string `json:"from,omitempty"`
-	To        string `json:"to"`        // recipient or group_id
+	To        string `json:"to"`         // recipient or group_id
 	MessageTS int64  `json:"message_ts"` // timestamp of the message being reacted to
 	Emoji     string `json:"emoji"`
 }
 
 // FileMetaMsg announces an incoming file transfer.
 type FileMetaMsg struct {
-	Type       string `json:"type"`
-	From       string `json:"from,omitempty"`
-	To         string `json:"to"`
-	FileID     string `json:"file_id"`
-	FileName   string `json:"file_name"`
-	FileSize   int64  `json:"file_size"`
-	Nonce      string `json:"nonce"`
-	TotalChunks int   `json:"total_chunks"`
+	Type        string `json:"type"`
+	From        string `json:"from,omitempty"`
+	To          string `json:"to"`
+	FileID      string `json:"file_id"`
+	FileName    string `json:"file_name"`
+	FileSize    int64  `json:"file_size"`
+	Nonce       string `json:"nonce"`
+	TotalChunks int    `json:"total_chunks"`
 }
 
 // FileChunkMsg carries one encrypted chunk of a file.
@@ -178,6 +178,38 @@ type FileChunkMsg struct {
 	ChunkIndex int    `json:"chunk_index"`
 	Nonce      string `json:"nonce"`
 	Ciphertext string `json:"ciphertext"`
+}
+
+// VibeStartMsg announces a collaborative coding session.
+type VibeStartMsg struct {
+	Type     string `json:"type"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to"` // DM recipient or group ID
+	RepoName string `json:"repo_name"`
+}
+
+// VibePromptMsg sends a prompt from a participant to the host's Claude Code.
+type VibePromptMsg struct {
+	Type   string `json:"type"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to"` // the host's public key
+	Prompt string `json:"prompt"`
+}
+
+// VibeOutputMsg streams Claude Code output from the host to participants.
+type VibeOutputMsg struct {
+	Type   string `json:"type"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to"` // DM recipient or group ID
+	Text   string `json:"text"`
+	IsDone bool   `json:"is_done"`
+}
+
+// VibeEndMsg ends a collaborative coding session.
+type VibeEndMsg struct {
+	Type string `json:"type"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to"`
 }
 
 // EphemeralMsg notifies the other party about ephemeral mode changes.

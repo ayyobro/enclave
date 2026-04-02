@@ -20,9 +20,9 @@ type InputModel struct {
 	height   int
 
 	// Autocomplete state
-	showComplete   bool
-	completions    []SlashCommand
-	completeIdx    int
+	showComplete bool
+	completions  []SlashCommand
+	completeIdx  int
 }
 
 func NewInputModel() InputModel {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -33,9 +34,6 @@ type Server struct {
 
 	// Admin key for authenticated API endpoints (invite generation)
 	adminKey string
-
-	// Pending auth challenges (clientPubKey -> challenge)
-	challenges map[string][32]byte
 }
 
 // NewServer creates a new Enclave server.
@@ -60,7 +58,6 @@ func NewServer(store Store, logger *slog.Logger, dataDir string) (*Server, error
 		serverPub:  pub,
 		serverPriv: priv,
 		adminKey:   adminKey,
-		challenges: make(map[string][32]byte),
 	}
 
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
@@ -167,8 +164,8 @@ func (s *Server) handleRegister(ctx context.Context, conn *websocket.Conn, data 
 		return
 	}
 
-	if len(msg.DisplayName) == 0 || len(msg.DisplayName) > protocol.MaxDisplayName {
-		s.sendError(ctx, conn, "invalid_name", "display name must be 1-32 characters")
+	if !isValidDisplayName(msg.DisplayName) {
+		s.sendError(ctx, conn, "invalid_name", "display name must be 1-32 printable characters")
 		return
 	}
 
@@ -216,10 +213,10 @@ func (s *Server) handleAuth(ctx context.Context, conn *websocket.Conn, data []by
 		return
 	}
 
-	// Look up user
+	// Look up user (generic error to prevent enumeration)
 	user, err := s.store.GetUserByKey(pubKeyBytes)
 	if err != nil {
-		s.sendError(ctx, conn, "unknown_user", "public key not registered")
+		s.sendError(ctx, conn, "auth_failed", "authentication failed")
 		return
 	}
 
@@ -321,7 +318,7 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing or invalid Authorization header"}`, http.StatusUnauthorized)
 		return
 	}
-	if auth[7:] != s.adminKey {
+	if subtle.ConstantTimeCompare([]byte(auth[7:]), []byte(s.adminKey)) != 1 {
 		http.Error(w, `{"error":"invalid admin key"}`, http.StatusForbidden)
 		return
 	}
@@ -432,4 +429,17 @@ func loadOrGenerateServerKeys(dataDir string) (*[32]byte, *[32]byte, error) {
 	}
 
 	return pub, priv, nil
+}
+
+// isValidDisplayName checks for safe printable characters.
+func isValidDisplayName(name string) bool {
+	if len(name) == 0 || len(name) > protocol.MaxDisplayName {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || (r >= 0x7F && r <= 0x9F) {
+			return false
+		}
+	}
+	return true
 }
