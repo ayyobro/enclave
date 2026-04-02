@@ -41,6 +41,6 @@ changelog:
 
 release:
   github:
-    owner: dfoster
+    owner: ayyobro
     name: enclave
   draft: true

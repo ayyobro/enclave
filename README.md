@@ -56,7 +56,7 @@ Enclave is a TUI (terminal UI) chat application that runs in your terminal along
 ### Build
 
 ```bash
-git clone <repo-url> && cd enclave
+git clone https://github.com/ayyobro/enclave.git && cd enclave
 make build
 ```
 
@@ -186,7 +186,7 @@ su - enclave
 # Download or build the binary
 # Option A: Build from source
 sudo apt install -y golang-go git
-git clone <repo-url> && cd enclave
+git clone https://github.com/ayyobro/enclave.git && cd enclave
 make build
 
 # Option B: Download a release binary
