@@ -125,12 +125,12 @@ type GroupLeaveMsg struct {
 // GroupChatMsg carries an encrypted message to a group.
 // The sender encrypts the plaintext once per recipient.
 type GroupChatMsg struct {
-	Type       string              `json:"type"`
-	From       string              `json:"from,omitempty"`
-	GroupID    string              `json:"group_id"`
+	Type       string               `json:"type"`
+	From       string               `json:"from,omitempty"`
+	GroupID    string               `json:"group_id"`
 	Recipients []GroupChatRecipient `json:"recipients"`
-	ID         int64               `json:"id,omitempty"`
-	Timestamp  int64               `json:"ts,omitempty"`
+	ID         int64                `json:"id,omitempty"`
+	Timestamp  int64                `json:"ts,omitempty"`
 }
 
 // GroupChatRecipient holds the per-recipient encrypted payload.
@@ -152,21 +152,21 @@ type ReadReceiptMsg struct {
 type ReactionMsg struct {
 	Type      string `json:"type"`
 	From      string `json:"from,omitempty"`
-	To        string `json:"to"`        // recipient or group_id
+	To        string `json:"to"`         // recipient or group_id
 	MessageTS int64  `json:"message_ts"` // timestamp of the message being reacted to
 	Emoji     string `json:"emoji"`
 }
 
 // FileMetaMsg announces an incoming file transfer.
 type FileMetaMsg struct {
-	Type       string `json:"type"`
-	From       string `json:"from,omitempty"`
-	To         string `json:"to"`
-	FileID     string `json:"file_id"`
-	FileName   string `json:"file_name"`
-	FileSize   int64  `json:"file_size"`
-	Nonce      string `json:"nonce"`
-	TotalChunks int   `json:"total_chunks"`
+	Type        string `json:"type"`
+	From        string `json:"from,omitempty"`
+	To          string `json:"to"`
+	FileID      string `json:"file_id"`
+	FileName    string `json:"file_name"`
+	FileSize    int64  `json:"file_size"`
+	Nonce       string `json:"nonce"`
+	TotalChunks int    `json:"total_chunks"`
 }
 
 // FileChunkMsg carries one encrypted chunk of a file.

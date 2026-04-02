@@ -288,8 +288,8 @@ func TestAdminInviteAPI(t *testing.T) {
 	}
 
 	var result struct {
-		Token    string `json:"token"`
-		MaxUses  int    `json:"max_uses"`
+		Token     string `json:"token"`
+		MaxUses   int    `json:"max_uses"`
 		ExpiresAt string `json:"expires_at"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)

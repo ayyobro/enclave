@@ -16,9 +16,9 @@ import (
 
 // SSHServer wraps a Wish SSH server that serves the Enclave TUI to SSH clients.
 type SSHServer struct {
-	srv       *ssh.Server
-	wsAddr    string // address of the WebSocket relay server
-	logger    *slog.Logger
+	srv    *ssh.Server
+	wsAddr string // address of the WebSocket relay server
+	logger *slog.Logger
 }
 
 // NewSSHServer creates a new SSH-served TUI gateway.

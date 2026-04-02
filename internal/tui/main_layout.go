@@ -17,9 +17,9 @@ type MainModel struct {
 	statusBar     StatusBarModel
 	contactDetail ContactDetailModel
 
-	focus     FocusPane
-	width     int
-	height    int
+	focus  FocusPane
+	width  int
+	height int
 
 	activeContact string // pubkey of selected contact
 	disconnected  bool

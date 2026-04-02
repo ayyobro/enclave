@@ -23,7 +23,7 @@ type ReconnectingMsg struct {
 
 // ContactInfo represents a known contact or group for display.
 type ContactInfo struct {
-	PublicKey    string // public key for DMs, group ID for groups
+	PublicKey   string // public key for DMs, group ID for groups
 	DisplayName string
 	Online      bool
 	IsGroup     bool

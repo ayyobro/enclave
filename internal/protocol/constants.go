@@ -34,9 +34,9 @@ const (
 	TypeGroupInfo    = "group_info"
 
 	// Limits
-	MaxMessageSize  = 64 * 1024 // 64 KB
+	MaxMessageSize  = 64 * 1024        // 64 KB
 	MaxFileSize     = 10 * 1024 * 1024 // 10 MB
-	FileChunkSize   = 32 * 1024 // 32 KB
+	FileChunkSize   = 32 * 1024        // 32 KB
 	MaxDisplayName  = 32
 	MaxGroupName    = 64
 	MaxGroupMembers = 50

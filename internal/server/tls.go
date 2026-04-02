@@ -25,7 +25,7 @@ func LoadOrGenerateTLSConfig(certPath, keyPath, dataDir string) (*tls.Config, er
 		if err != nil {
 			return nil, fmt.Errorf("loading TLS cert/key: %w", err)
 		}
-		return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+		return hardenedTLSConfig(cert), nil
 	}
 
 	// Try loading from data dir
@@ -38,7 +38,7 @@ func LoadOrGenerateTLSConfig(certPath, keyPath, dataDir string) (*tls.Config, er
 			if err != nil {
 				return nil, fmt.Errorf("loading existing TLS cert: %w", err)
 			}
-			return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+			return hardenedTLSConfig(cert), nil
 		}
 	}
 
@@ -47,7 +47,20 @@ func LoadOrGenerateTLSConfig(certPath, keyPath, dataDir string) (*tls.Config, er
 	if err != nil {
 		return nil, fmt.Errorf("generating self-signed cert: %w", err)
 	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+	return hardenedTLSConfig(cert), nil
+}
+
+func hardenedTLSConfig(cert tls.Certificate) *tls.Config {
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}
 }
 
 func generateSelfSignedCert(certPath, keyPath string) (tls.Certificate, error) {
@@ -65,7 +78,7 @@ func generateSelfSignedCert(certPath, keyPath string) (tls.Certificate, error) {
 			CommonName:   "Enclave Server",
 		},
 		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(10 * 365 * 24 * time.Hour), // 10 years
+		NotAfter:  time.Now().Add(365 * 24 * time.Hour), // 1 year
 
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},

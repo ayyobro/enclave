@@ -4,9 +4,9 @@ import "time"
 
 // User represents a registered user in the server database.
 type User struct {
-	ID          int64
-	PublicKey   []byte
-	DisplayName string
+	ID           int64
+	PublicKey    []byte
+	DisplayName  string
 	RegisteredAt time.Time
 }
 
