@@ -40,5 +40,8 @@ messages.db
 # Config with secrets
 config.toml
 
+# Server data (keys, certs, database)
+server-data/
+
 # Local test data
 /tmp/
