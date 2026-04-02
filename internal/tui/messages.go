@@ -47,10 +47,17 @@ type TUIErrorMsg struct {
 	Err error
 }
 
-// CopyCodeBlockMsg requests copying a code block to clipboard.
-type CopyCodeBlockMsg struct {
-	Index int // 1-based code block index
+// SlashCommandMsg is emitted when the user executes a slash command.
+type SlashCommandMsg struct {
+	Name string // e.g. "/help", "/clear"
+	Args string // everything after the command name
 }
+
+// UserTypingMsg is emitted by the input model when the user types a non-command character.
+type UserTypingMsg struct{}
+
+// TypingClearTickMsg fires after a delay to clear the typing indicator.
+type TypingClearTickMsg struct{}
 
 // FocusPane identifies which pane has focus.
 type FocusPane int

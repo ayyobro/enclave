@@ -15,6 +15,7 @@ type Config struct {
 
 type ServerConfig struct {
 	Address string `toml:"address"`
+	TLS     bool   `toml:"tls"`
 }
 
 // ServerRunConfig holds configuration for running the enclave server.

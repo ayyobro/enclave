@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	cryptotls "crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ var (
 	inviteAdminKey string
 	inviteExpires  time.Duration
 	inviteUses     int
+	inviteTLS      bool
 )
 
 func init() {
@@ -29,6 +31,7 @@ func init() {
 	inviteCmd.Flags().StringVar(&inviteAdminKey, "admin-key", "", "Admin key (printed when the server starts)")
 	inviteCmd.Flags().DurationVar(&inviteExpires, "expires", 72*time.Hour, "Token expiration duration")
 	inviteCmd.Flags().IntVar(&inviteUses, "uses", 1, "Maximum uses for this token")
+	inviteCmd.Flags().BoolVar(&inviteTLS, "tls", false, "Connect to server using TLS")
 }
 
 func runInvite(cmd *cobra.Command, args []string) error {
@@ -42,7 +45,11 @@ func runInvite(cmd *cobra.Command, args []string) error {
 		"expires_in": inviteExpires.String(),
 	})
 
-	url := fmt.Sprintf("http://%s/api/invite", inviteServer)
+	scheme := "http"
+	if inviteTLS {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/api/invite", scheme, inviteServer)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
@@ -50,7 +57,17 @@ func runInvite(cmd *cobra.Command, args []string) error {
 	req.Header.Set("Authorization", "Bearer "+inviteAdminKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := http.DefaultClient
+	if inviteTLS {
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &cryptotls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connecting to server at %s: %w", inviteServer, err)
 	}

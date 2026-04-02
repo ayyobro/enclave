@@ -92,14 +92,18 @@ func (m *ChatViewModel) AddSystemMessage(text string) {
 	m.viewport.GotoBottom()
 }
 
-func (m *ChatViewModel) SetTyping(from string) {
+func (m *ChatViewModel) SetTyping(fromName string) {
 	m.typing = true
-	m.typingFrom = from
+	m.typingFrom = fromName
 	m.typingTimer = time.Now()
+	m.refreshContent()
 }
 
 func (m *ChatViewModel) ClearTyping() {
-	m.typing = false
+	if m.typing {
+		m.typing = false
+		m.refreshContent()
+	}
 }
 
 func (m ChatViewModel) Update(msg tea.Msg) (ChatViewModel, tea.Cmd) {

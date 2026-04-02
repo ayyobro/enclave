@@ -51,8 +51,8 @@ func TestAppCoreConnectAndChat(t *testing.T) {
 	alicePub, alicePriv, _ := box.GenerateKey(rand.Reader)
 	bobPub, bobPriv, _ := box.GenerateKey(rand.Reader)
 
-	aliceCore := NewAppCore(addr, alicePub, alicePriv, "alice", logger)
-	bobCore := NewAppCore(addr, bobPub, bobPriv, "bob", logger)
+	aliceCore := NewAppCore(addr, false, alicePub, alicePriv, "alice", nil, logger)
+	bobCore := NewAppCore(addr, false, bobPub, bobPriv, "bob", nil, logger)
 	defer aliceCore.Close()
 	defer bobCore.Close()
 

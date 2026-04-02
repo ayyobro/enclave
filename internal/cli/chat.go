@@ -12,6 +12,8 @@ import (
 	"enclave/internal/client"
 	"enclave/internal/config"
 	"enclave/internal/crypto"
+	"enclave/internal/store"
+	"enclave/internal/theme"
 	"enclave/internal/tui"
 )
 
@@ -21,10 +23,14 @@ var chatCmd = &cobra.Command{
 	RunE:  runChat,
 }
 
-var chatServer string
+var (
+	chatServer string
+	chatTheme  string
+)
 
 func init() {
 	chatCmd.Flags().StringVar(&chatServer, "server", "", "Override server address from config")
+	chatCmd.Flags().StringVar(&chatTheme, "theme", "dark", "Color theme: dark, light, dracula, nord")
 }
 
 func runChat(cmd *cobra.Command, args []string) error {
@@ -64,8 +70,17 @@ func runChat(cmd *cobra.Command, args []string) error {
 	defer logFile.Close()
 	logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
+	// Open local message store
+	msgStore, err := store.NewSQLiteStore(config.MessagesDBPath())
+	if err != nil {
+		logger.Warn("could not open message store, history will not persist", "error", err)
+	}
+
+	// Set color theme
+	theme.Set(chatTheme)
+
 	// Create the app core
-	appCore := client.NewAppCore(serverAddr, pub, priv, displayName, logger)
+	appCore := client.NewAppCore(serverAddr, cfg.Server.TLS, pub, priv, displayName, msgStore, logger)
 
 	// Create the TUI app
 	app := tui.NewApp(appCore, displayName, pubB64)

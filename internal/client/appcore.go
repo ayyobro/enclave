@@ -13,10 +13,10 @@ import (
 
 	"enclave/internal/crypto"
 	"enclave/internal/protocol"
+	"enclave/internal/store"
 )
 
-// Event types returned by ProcessIncoming. The TUI layer reads these
-// and converts them to tea.Msg types, breaking the import cycle.
+// Event types returned by ProcessIncoming.
 
 type IncomingChatEvent struct {
 	From      string
@@ -31,7 +31,8 @@ type PresenceEvent struct {
 }
 
 type TypingEvent struct {
-	From string
+	From     string
+	FromName string
 }
 
 type ErrorEvent struct {
@@ -44,10 +45,19 @@ type ContactEntry struct {
 	Online      bool
 }
 
+// HistoryMessage is a message loaded from local storage.
+type HistoryMessage struct {
+	Direction store.Direction
+	Plaintext string
+	Timestamp time.Time
+	FromName  string
+}
+
 // AppCore is the business logic layer that connects the TUI to the network.
 type AppCore struct {
 	ws       *WSClient
 	presence *PresenceTracker
+	msgStore store.MessageStore
 	logger   *slog.Logger
 
 	myPub    *[32]byte
@@ -56,22 +66,26 @@ type AppCore struct {
 	myName   string
 
 	contactNames map[string]string
+	// Cache conversation IDs: peerKeyB64 -> conversation ID
+	convoIDs map[string]int64
 
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewAppCore(serverAddr string, pub, priv *[32]byte, displayName string, logger *slog.Logger) *AppCore {
+func NewAppCore(serverAddr string, useTLS bool, pub, priv *[32]byte, displayName string, msgStore store.MessageStore, logger *slog.Logger) *AppCore {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AppCore{
-		ws:           NewWSClient(serverAddr, logger),
+		ws:           NewWSClient(serverAddr, useTLS, logger),
 		presence:     NewPresenceTracker(),
+		msgStore:     msgStore,
 		logger:       logger,
 		myPub:        pub,
 		myPriv:       priv,
 		myPubB64:     base64.StdEncoding.EncodeToString(pub[:]),
 		myName:       displayName,
 		contactNames: make(map[string]string),
+		convoIDs:     make(map[string]int64),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -110,9 +124,24 @@ func (a *AppCore) ConnectAndAuth(token string) ([]ContactEntry, error) {
 			DisplayName: u.DisplayName,
 			Online:      u.Online,
 		})
+
+		// Ensure conversation exists in local store
+		a.ensureConversation(u.PublicKey, u.DisplayName)
 	}
 
 	return contacts, nil
+}
+
+func (a *AppCore) ensureConversation(peerKey, displayName string) {
+	if a.msgStore == nil {
+		return
+	}
+	convo, err := a.msgStore.GetOrCreateConversation(peerKey, displayName)
+	if err != nil {
+		a.logger.Warn("creating conversation", "error", err)
+		return
+	}
+	a.convoIDs[peerKey] = convo.ID
 }
 
 func (a *AppCore) solveChallenge(challengeNonce []byte, serverPubKeyBytes []byte) ([]byte, error) {
@@ -131,7 +160,7 @@ func (a *AppCore) solveChallenge(challengeNonce []byte, serverPubKeyBytes []byte
 	return sealed, nil
 }
 
-// SendMessage encrypts and sends a message.
+// SendMessage encrypts, sends, and persists a message.
 func (a *AppCore) SendMessage(toPubKeyB64, plaintext string) error {
 	peerPub, err := crypto.PubKeyFromBase64(toPubKeyB64)
 	if err != nil {
@@ -150,7 +179,13 @@ func (a *AppCore) SendMessage(toPubKeyB64, plaintext string) error {
 		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
 	}
 	data, _ := json.Marshal(msg)
-	return a.ws.Send(data)
+	if err := a.ws.Send(data); err != nil {
+		return err
+	}
+
+	// Persist locally
+	a.saveLocal(toPubKeyB64, store.Sent, plaintext, time.Now(), 0)
+	return nil
 }
 
 // SendTyping sends a typing indicator.
@@ -164,7 +199,6 @@ func (a *AppCore) SendTyping(toPubKeyB64 string) {
 }
 
 // ProcessIncoming decodes and processes a raw server message.
-// Returns one of: *IncomingChatEvent, *PresenceEvent, *TypingEvent, *ErrorEvent, or nil.
 func (a *AppCore) ProcessIncoming(data []byte) interface{} {
 	msgType, err := protocol.ParseType(data)
 	if err != nil {
@@ -193,6 +227,15 @@ func (a *AppCore) processChat(data []byte) interface{} {
 	var msg protocol.ChatMsg
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
+	}
+
+	// Deduplicate offline-delivered messages
+	if msg.ID > 0 && a.msgStore != nil {
+		has, _ := a.msgStore.HasServerMessage(msg.ID)
+		if has {
+			a.logger.Debug("skipping duplicate message", "server_id", msg.ID)
+			return nil
+		}
 	}
 
 	peerPub, err := crypto.PubKeyFromBase64(msg.From)
@@ -228,12 +271,78 @@ func (a *AppCore) processChat(data []byte) interface{} {
 		ts = time.Unix(msg.Timestamp, 0)
 	}
 
+	// Persist locally
+	a.saveLocal(msg.From, store.Received, string(plaintext), ts, msg.ID)
+
 	return &IncomingChatEvent{
 		From:      msg.From,
 		FromName:  fromName,
 		Plaintext: string(plaintext),
 		Timestamp: ts,
 	}
+}
+
+func (a *AppCore) saveLocal(peerKey string, dir store.Direction, plaintext string, ts time.Time, serverID int64) {
+	if a.msgStore == nil {
+		return
+	}
+	convoID, ok := a.convoIDs[peerKey]
+	if !ok {
+		name := a.contactNames[peerKey]
+		if name == "" {
+			name = peerKey[:12] + "..."
+		}
+		a.ensureConversation(peerKey, name)
+		convoID = a.convoIDs[peerKey]
+	}
+	if convoID == 0 {
+		return
+	}
+	_, err := a.msgStore.SaveMessage(convoID, dir, plaintext, ts, serverID)
+	if err != nil {
+		a.logger.Warn("saving message", "error", err)
+	}
+}
+
+// LoadHistory returns recent messages for a conversation.
+func (a *AppCore) LoadHistory(peerKey string, limit int) ([]HistoryMessage, error) {
+	if a.msgStore == nil {
+		return nil, nil
+	}
+	convoID, ok := a.convoIDs[peerKey]
+	if !ok {
+		return nil, nil
+	}
+	msgs, err := a.msgStore.GetRecentMessages(convoID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]HistoryMessage, len(msgs))
+	for i, m := range msgs {
+		fromName := a.myName
+		if m.Direction == store.Received {
+			fromName = a.contactNames[peerKey]
+			if fromName == "" {
+				fromName = peerKey[:12] + "..."
+			}
+		}
+		result[i] = HistoryMessage{
+			Direction: m.Direction,
+			Plaintext: m.Plaintext,
+			Timestamp: m.Timestamp,
+			FromName:  fromName,
+		}
+	}
+	return result, nil
+}
+
+// SearchMessages searches local message history.
+func (a *AppCore) SearchMessages(query string, limit int) ([]store.SearchResult, error) {
+	if a.msgStore == nil {
+		return nil, fmt.Errorf("message store not available")
+	}
+	return a.msgStore.SearchMessages(query, limit)
 }
 
 func (a *AppCore) processPresence(data []byte) interface{} {
@@ -250,7 +359,11 @@ func (a *AppCore) processTyping(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	return &TypingEvent{From: msg.From}
+	fromName := a.contactNames[msg.From]
+	if fromName == "" {
+		fromName = msg.From[:12] + "..."
+	}
+	return &TypingEvent{From: msg.From, FromName: fromName}
 }
 
 // RecvChannel returns the receive channel for incoming messages.
@@ -268,8 +381,11 @@ func (a *AppCore) ContactName(pubKeyB64 string) string {
 	return a.contactNames[pubKeyB64]
 }
 
-// Close shuts down the connection.
+// Close shuts down the connection and the store.
 func (a *AppCore) Close() {
 	a.cancel()
 	a.ws.Close()
+	if a.msgStore != nil {
+		a.msgStore.Close()
+	}
 }
