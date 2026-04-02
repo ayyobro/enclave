@@ -69,8 +69,16 @@ func (s *Session) SendPrompt(prompt string, sender string) error {
 	}
 	s.mu.Unlock()
 
+	// Sanitize sender name (could come from remote user)
+	safeSender := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '[' || r == ']' {
+			return -1
+		}
+		return r
+	}, sender)
+
 	// Build the prompt with attribution
-	fullPrompt := fmt.Sprintf("[%s]: %s", sender, prompt)
+	fullPrompt := fmt.Sprintf("[%s]: %s", safeSender, prompt)
 
 	// Build command args
 	args := []string{

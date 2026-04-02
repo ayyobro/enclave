@@ -3,10 +3,11 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"enclave/internal/protocol"
 )
@@ -309,7 +310,7 @@ func (h *Hub) handleGroupCreate(msg clientMessage) {
 	}
 
 	senderKey := base64.StdEncoding.EncodeToString(msg.client.publicKey)
-	groupID := fmt.Sprintf("g_%d", time.Now().UnixNano())
+	groupID := "g_" + uuid.New().String()
 
 	// Ensure creator is in members list
 	members := append(create.Members, senderKey)
@@ -358,6 +359,25 @@ func (h *Hub) handleGroupInvite(msg clientMessage) {
 		return
 	}
 
+	// Verify the inviter is a member of the group
+	senderKey := base64.StdEncoding.EncodeToString(msg.client.publicKey)
+	members, err := h.store.GetGroupMembers(invite.GroupID)
+	if err != nil {
+		h.logger.Warn("group not found for invite", "group", invite.GroupID)
+		return
+	}
+	isMember := false
+	for _, m := range members {
+		if m == senderKey {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		h.logger.Warn("non-member tried to invite to group", "group", invite.GroupID, "sender", senderKey[:12]+"...")
+		return
+	}
+
 	if err := h.store.AddGroupMember(invite.GroupID, invite.Member); err != nil {
 		h.logger.Error("adding group member", "error", err)
 		return
@@ -368,7 +388,8 @@ func (h *Hub) handleGroupInvite(msg clientMessage) {
 	if err != nil {
 		return
 	}
-	members, _ := h.store.GetGroupMembers(invite.GroupID)
+	// Refresh members list after adding new member
+	members, _ = h.store.GetGroupMembers(invite.GroupID)
 
 	created := protocol.GroupCreatedMsg{
 		Type:    protocol.TypeGroupCreated,

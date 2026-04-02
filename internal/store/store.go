@@ -12,13 +12,13 @@ const (
 
 // Conversation represents a chat with a specific peer or group.
 type Conversation struct {
-	ID           int64
-	PeerKey      string // base64 public key or group ID
-	DisplayName  string
-	IsGroup      bool
-	LastMessage  string
-	LastMsgTime  time.Time
-	UnreadCount  int
+	ID          int64
+	PeerKey     string // base64 public key or group ID
+	DisplayName string
+	IsGroup     bool
+	LastMessage string
+	LastMsgTime time.Time
+	UnreadCount int
 }
 
 // Message represents a single chat message stored locally.
@@ -26,7 +26,7 @@ type Message struct {
 	ID             int64
 	ConversationID int64
 	Direction      Direction
-	SenderName     string    // display name of the sender (useful for group chats)
+	SenderName     string // display name of the sender (useful for group chats)
 	Plaintext      string
 	Timestamp      time.Time
 	ExpiresAt      time.Time // zero means no expiry
@@ -77,7 +77,7 @@ type MessageStore interface {
 
 // SearchResult pairs a message with its conversation context.
 type SearchResult struct {
-	Message      Message
-	PeerKey      string
-	DisplayName  string
+	Message     Message
+	PeerKey     string
+	DisplayName string
 }

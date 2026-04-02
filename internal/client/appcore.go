@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
@@ -137,7 +138,7 @@ type VibeEndEvent struct {
 }
 
 type ContactEntry struct {
-	PublicKey    string
+	PublicKey   string
 	DisplayName string
 	Online      bool
 }
@@ -172,11 +173,12 @@ type AppCore struct {
 
 	contactNames map[string]string
 	// Cache conversation IDs: peerKeyB64 or groupID -> conversation ID
-	convoIDs     map[string]int64
+	convoIDs map[string]int64
 	// Cache group membership: groupID -> member public keys
 	groupMembers map[string][]string
 	// In-progress file transfers: fileID -> pendingFile
 	pendingFiles map[string]*pendingFile
+	fileMu       sync.Mutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -317,7 +319,10 @@ func (a *AppCore) SendMessage(toPubKeyB64, plaintext string) (int64, error) {
 		Nonce:      base64.StdEncoding.EncodeToString(nonce[:]),
 		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return 0, fmt.Errorf("marshal: %w", err)
+	}
 	if err := a.ws.Send(data); err != nil {
 		return 0, err
 	}
@@ -358,7 +363,10 @@ func (a *AppCore) SendGroupMessage(groupID, plaintext string) (int64, error) {
 		GroupID:    groupID,
 		Recipients: recipients,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return 0, fmt.Errorf("marshal: %w", err)
+	}
 	if err := a.ws.Send(data); err != nil {
 		return 0, err
 	}
@@ -374,41 +382,30 @@ func (a *AppCore) CreateGroup(name string, memberKeys []string) error {
 		Name:    name,
 		Members: memberKeys,
 	}
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
 	return a.ws.Send(data)
 }
 
 // SendReadReceipt acknowledges a message was read.
 func (a *AppCore) SendReadReceipt(toPubKeyB64 string, messageTS int64) {
-	msg := protocol.ReadReceiptMsg{
-		Type:      protocol.TypeReadReceipt,
-		To:        toPubKeyB64,
-		MessageTS: messageTS,
-	}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.ReadReceiptMsg{
+		Type: protocol.TypeReadReceipt, To: toPubKeyB64, MessageTS: messageTS,
+	})
 }
 
 // SendReaction sends an emoji reaction to a message.
 func (a *AppCore) SendReaction(toPubKeyB64 string, messageTS int64, emoji string) {
-	msg := protocol.ReactionMsg{
-		Type:      protocol.TypeReaction,
-		To:        toPubKeyB64,
-		MessageTS: messageTS,
-		Emoji:     emoji,
-	}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.ReactionMsg{
+		Type: protocol.TypeReaction, To: toPubKeyB64, MessageTS: messageTS, Emoji: emoji,
+	})
 }
 
 // SendTyping sends a typing indicator.
 func (a *AppCore) SendTyping(toPubKeyB64 string) {
-	msg := protocol.TypingMsg{
-		Type: protocol.TypeTyping,
-		To:   toPubKeyB64,
-	}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.TypingMsg{Type: protocol.TypeTyping, To: toPubKeyB64})
 }
 
 // ProcessIncoming decodes and processes a raw server message.
@@ -466,47 +463,24 @@ func (a *AppCore) processChat(data []byte) interface{} {
 
 	// Deduplicate offline-delivered messages
 	if msg.ID > 0 && a.msgStore != nil {
-		has, _ := a.msgStore.HasServerMessage(msg.ID)
-		if has {
+		if has, _ := a.msgStore.HasServerMessage(msg.ID); has {
 			a.logger.Debug("skipping duplicate message", "server_id", msg.ID)
 			return nil
 		}
 	}
 
-	peerPub, err := crypto.PubKeyFromBase64(msg.From)
+	plaintext, err := a.decryptFrom(msg.From, msg.Nonce, msg.Ciphertext)
 	if err != nil {
+		a.logger.Warn("decryption failed", "from", truncate(msg.From, 12), "error", err)
 		return nil
 	}
 
-	nonceBytes, err := base64.StdEncoding.DecodeString(msg.Nonce)
-	if err != nil || len(nonceBytes) != 24 {
-		return nil
-	}
-	var nonce [24]byte
-	copy(nonce[:], nonceBytes)
-
-	ctBytes, err := base64.StdEncoding.DecodeString(msg.Ciphertext)
-	if err != nil {
-		return nil
-	}
-
-	plaintext, err := crypto.OpenMessage(ctBytes, &nonce, peerPub, a.myPriv)
-	if err != nil {
-		a.logger.Warn("decryption failed", "from", msg.From[:12]+"...", "error", err)
-		return nil
-	}
-
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
-
+	fromName := a.getDisplayName(msg.From)
 	ts := time.Now()
 	if msg.Timestamp > 0 {
 		ts = time.Unix(msg.Timestamp, 0)
 	}
 
-	// Persist locally
 	dbID := a.saveLocal(msg.From, store.Received, fromName, string(plaintext), ts, msg.ID)
 
 	return &IncomingChatEvent{
@@ -524,7 +498,7 @@ func (a *AppCore) processGroupChat(data []byte) interface{} {
 		return nil
 	}
 
-	// Find the recipient entry for us
+	// Find our recipient entry
 	var myRecipient *protocol.GroupChatRecipient
 	for i := range msg.Recipients {
 		if msg.Recipients[i].To == a.myPubB64 {
@@ -536,31 +510,13 @@ func (a *AppCore) processGroupChat(data []byte) interface{} {
 		return nil
 	}
 
-	// Decrypt
-	peerPub, err := crypto.PubKeyFromBase64(msg.From)
+	plaintext, err := a.decryptFrom(msg.From, myRecipient.Nonce, myRecipient.Ciphertext)
 	if err != nil {
-		return nil
-	}
-	nonceBytes, err := base64.StdEncoding.DecodeString(myRecipient.Nonce)
-	if err != nil || len(nonceBytes) != 24 {
-		return nil
-	}
-	var nonce [24]byte
-	copy(nonce[:], nonceBytes)
-	ctBytes, err := base64.StdEncoding.DecodeString(myRecipient.Ciphertext)
-	if err != nil {
-		return nil
-	}
-	plaintext, err := crypto.OpenMessage(ctBytes, &nonce, peerPub, a.myPriv)
-	if err != nil {
+		a.logger.Warn("group decryption failed", "from", truncate(msg.From, 12), "error", err)
 		return nil
 	}
 
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
-
+	fromName := a.getDisplayName(msg.From)
 	ts := time.Now()
 	if msg.Timestamp > 0 {
 		ts = time.Unix(msg.Timestamp, 0)
@@ -611,10 +567,7 @@ func (a *AppCore) processReaction(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 	return &ReactionEvent{
 		From:      msg.From,
 		FromName:  fromName,
@@ -628,10 +581,7 @@ func (a *AppCore) processFileMeta(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 
 	// Register pending file
 	a.pendingFiles[msg.FileID] = &pendingFile{
@@ -659,64 +609,61 @@ func (a *AppCore) processFileChunk(data []byte) interface{} {
 		return nil
 	}
 
-	peerPub, err := crypto.PubKeyFromBase64(msg.From)
+	plaintext, err := a.decryptFrom(msg.From, msg.Nonce, msg.Ciphertext)
 	if err != nil {
-		return nil
-	}
-	nonceBytes, err := base64.StdEncoding.DecodeString(msg.Nonce)
-	if err != nil || len(nonceBytes) != 24 {
-		return nil
-	}
-	var nonce [24]byte
-	copy(nonce[:], nonceBytes)
-	ctBytes, err := base64.StdEncoding.DecodeString(msg.Ciphertext)
-	if err != nil {
-		return nil
-	}
-	plaintext, err := crypto.OpenMessage(ctBytes, &nonce, peerPub, a.myPriv)
-	if err != nil {
+		a.logger.Debug("chunk decryption failed", "file", msg.FileID, "chunk", msg.ChunkIndex, "error", err)
 		return nil
 	}
 
-	// Add chunk to pending file
+	// Add chunk to pending file (mutex-protected for concurrent access)
+	a.fileMu.Lock()
 	pf, ok := a.pendingFiles[msg.FileID]
 	if !ok {
+		a.fileMu.Unlock()
 		return nil
 	}
 	pf.Chunks[msg.ChunkIndex] = plaintext
 
-	// Check if all chunks received
 	if len(pf.Chunks) < pf.TotalChunks {
+		a.fileMu.Unlock()
 		return nil // still waiting for more chunks
 	}
 
-	// Reassemble
+	// All chunks received — reassemble
 	var fullData []byte
 	for i := 0; i < pf.TotalChunks; i++ {
 		chunk, exists := pf.Chunks[i]
 		if !exists {
+			a.fileMu.Unlock()
 			a.logger.Warn("missing file chunk", "file", pf.FileName, "chunk", i)
 			return nil
 		}
 		fullData = append(fullData, chunk...)
 	}
+	delete(a.pendingFiles, msg.FileID)
+	a.fileMu.Unlock()
+
+	// Sanitize filename — prevent path traversal
+	safeFileName := filepath.Base(pf.FileName)
+	if safeFileName == "" || safeFileName == "." || safeFileName == ".." {
+		safeFileName = "received_file"
+	}
 
 	// Save to disk
 	filesDir := filepath.Join(config.DataDir(), "files")
 	os.MkdirAll(filesDir, 0700)
-	savePath := filepath.Join(filesDir, pf.FileName)
+	savePath := filepath.Join(filesDir, safeFileName)
 
-	// Avoid overwriting — add suffix if exists
+	// Avoid overwriting — add timestamp suffix if exists
 	if _, err := os.Stat(savePath); err == nil {
-		ext := filepath.Ext(pf.FileName)
-		base := pf.FileName[:len(pf.FileName)-len(ext)]
+		ext := filepath.Ext(safeFileName)
+		base := safeFileName[:len(safeFileName)-len(ext)]
 		savePath = filepath.Join(filesDir, fmt.Sprintf("%s_%d%s", base, time.Now().Unix(), ext))
 	}
 
-	os.WriteFile(savePath, fullData, 0600)
-
-	// Clean up
-	delete(a.pendingFiles, msg.FileID)
+	if err := os.WriteFile(savePath, fullData, 0600); err != nil {
+		a.logger.Warn("saving file", "error", err)
+	}
 
 	return &FileCompleteEvent{
 		From:     pf.From,
@@ -733,10 +680,7 @@ func (a *AppCore) processEphemeral(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 	return &EphemeralEvent{
 		From:     msg.From,
 		FromName: fromName,
@@ -749,10 +693,7 @@ func (a *AppCore) processVibeStart(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 	// For DMs, the conversation key on the participant side is the host's pubkey
 	// For groups, the conversation key is the group ID
 	convoKey := msg.From
@@ -768,10 +709,7 @@ func (a *AppCore) processVibePrompt(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 	return &VibePromptEvent{From: msg.From, FromName: fromName, Prompt: msg.Prompt}
 }
 
@@ -788,50 +726,28 @@ func (a *AppCore) processVibeEnd(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 	return &VibeEndEvent{From: msg.From, FromName: fromName}
 }
 
-// SendVibeStart announces a vibe session.
 func (a *AppCore) SendVibeStart(to, repoName string) {
-	msg := protocol.VibeStartMsg{Type: protocol.TypeVibeStart, To: to, RepoName: repoName}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.VibeStartMsg{Type: protocol.TypeVibeStart, To: to, RepoName: repoName})
 }
 
-// SendVibePrompt sends a prompt to the host.
 func (a *AppCore) SendVibePrompt(to, prompt string) {
-	msg := protocol.VibePromptMsg{Type: protocol.TypeVibePrompt, To: to, Prompt: prompt}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.VibePromptMsg{Type: protocol.TypeVibePrompt, To: to, Prompt: prompt})
 }
 
-// SendVibeOutput streams Claude Code output to participants.
 func (a *AppCore) SendVibeOutput(to, text string, isDone bool) {
-	msg := protocol.VibeOutputMsg{Type: protocol.TypeVibeOutput, To: to, Text: text, IsDone: isDone}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.VibeOutputMsg{Type: protocol.TypeVibeOutput, To: to, Text: text, IsDone: isDone})
 }
 
-// SendVibeEnd announces session end.
 func (a *AppCore) SendVibeEnd(to string) {
-	msg := protocol.VibeEndMsg{Type: protocol.TypeVibeEnd, To: to}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+	a.sendJSON(protocol.VibeEndMsg{Type: protocol.TypeVibeEnd, To: to})
 }
 
-// SendEphemeralNotice notifies the other party about ephemeral mode.
-func (a *AppCore) SendEphemeralNotice(to string, duration string) {
-	msg := protocol.EphemeralMsg{
-		Type:     protocol.TypeEphemeral,
-		To:       to,
-		Duration: duration,
-	}
-	data, _ := json.Marshal(msg)
-	a.ws.Send(data)
+func (a *AppCore) SendEphemeralNotice(to, duration string) {
+	a.sendJSON(protocol.EphemeralMsg{Type: protocol.TypeEphemeral, To: to, Duration: duration})
 }
 
 // GetGroupMembers returns the member keys for a group.
@@ -937,10 +853,7 @@ func (a *AppCore) processTyping(data []byte) interface{} {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil
 	}
-	fromName := a.contactNames[msg.From]
-	if fromName == "" {
-		fromName = msg.From[:12] + "..."
-	}
+	fromName := a.getDisplayName(msg.From)
 	return &TypingEvent{From: msg.From, FromName: fromName}
 }
 
@@ -996,4 +909,81 @@ func (a *AppCore) Close() {
 	if a.msgStore != nil {
 		a.msgStore.Close()
 	}
+}
+
+// --- Helpers ---
+
+// getDisplayName resolves a public key to a display name, with a safe truncated fallback.
+func (a *AppCore) getDisplayName(pubKeyB64 string) string {
+	if name := a.contactNames[pubKeyB64]; name != "" {
+		return name
+	}
+	if len(pubKeyB64) > 12 {
+		return pubKeyB64[:12] + "..."
+	}
+	return pubKeyB64
+}
+
+// sendJSON marshals and sends a protocol message, logging errors instead of silently discarding.
+func (a *AppCore) sendJSON(msg interface{}) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		a.logger.Warn("marshal failed", "error", err)
+		return
+	}
+	if err := a.ws.Send(data); err != nil {
+		a.logger.Debug("send failed", "error", err)
+	}
+}
+
+// decodeNonce decodes a base64 nonce string and validates its length.
+func decodeNonce(nonceB64 string) (*[24]byte, error) {
+	nonceBytes, err := base64.StdEncoding.DecodeString(nonceB64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid nonce encoding: %w", err)
+	}
+	if len(nonceBytes) != 24 {
+		return nil, fmt.Errorf("invalid nonce size: got %d, want 24", len(nonceBytes))
+	}
+	var nonce [24]byte
+	copy(nonce[:], nonceBytes)
+	return &nonce, nil
+}
+
+// decryptFrom decrypts a message from a sender identified by their base64 public key.
+func (a *AppCore) decryptFrom(fromB64, nonceB64, ciphertextB64 string) ([]byte, error) {
+	peerPub, err := crypto.PubKeyFromBase64(fromB64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid sender key: %w", err)
+	}
+	nonce, err := decodeNonce(nonceB64)
+	if err != nil {
+		return nil, err
+	}
+	ctBytes, err := base64.StdEncoding.DecodeString(ciphertextB64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ciphertext: %w", err)
+	}
+	return crypto.OpenMessage(ctBytes, nonce, peerPub, a.myPriv)
+}
+
+// truncate safely truncates a string to maxLen with ellipsis.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// validateDisplayName checks if a display name is safe (no control chars, reasonable length).
+func validateDisplayName(name string) bool {
+	if len(name) == 0 || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || (r >= 0x7F && r <= 0x9F) {
+			return false
+		}
+	}
+	return true
 }

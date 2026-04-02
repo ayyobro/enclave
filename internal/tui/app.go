@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 
 	"enclave/internal/client"
 	"enclave/internal/config"

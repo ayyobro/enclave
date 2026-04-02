@@ -76,12 +76,12 @@ func Set(name string) {
 // Styles provides pre-built lipgloss styles from the current theme.
 type Styles struct {
 	// Sidebar
-	SidebarBorder     lipgloss.Style
-	ContactName       lipgloss.Style
-	ContactSelected   lipgloss.Style
-	UnreadBadge       lipgloss.Style
-	OnlineIndicator   lipgloss.Style
-	OfflineIndicator  lipgloss.Style
+	SidebarBorder    lipgloss.Style
+	ContactName      lipgloss.Style
+	ContactSelected  lipgloss.Style
+	UnreadBadge      lipgloss.Style
+	OnlineIndicator  lipgloss.Style
+	OfflineIndicator lipgloss.Style
 
 	// Chat
 	OwnNameStyle   lipgloss.Style
@@ -92,10 +92,10 @@ type Styles struct {
 	CodeBlock      lipgloss.Style
 
 	// Status bar
-	StatusBarStyle lipgloss.Style
-	StatusConnected lipgloss.Style
+	StatusBarStyle     lipgloss.Style
+	StatusConnected    lipgloss.Style
 	StatusDisconnected lipgloss.Style
-	StatusE2E      lipgloss.Style
+	StatusE2E          lipgloss.Style
 
 	// General
 	Title    lipgloss.Style

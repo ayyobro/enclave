@@ -5,9 +5,9 @@ import (
 	"unicode"
 )
 
-// SanitizePrompt removes invisible characters, control sequences, and other
-// potentially dangerous content from a remote user's prompt before it reaches
-// Claude Code. This prevents prompt injection via hidden characters.
+// SanitizePrompt removes invisible characters, control sequences, flag-like
+// prefixes, and other potentially dangerous content from a remote user's prompt
+// before it reaches Claude Code.
 func SanitizePrompt(input string) (sanitized string, removed int) {
 	var b strings.Builder
 	b.Grow(len(input))
@@ -20,7 +20,12 @@ func SanitizePrompt(input string) (sanitized string, removed int) {
 		b.WriteRune(r)
 	}
 
-	return b.String(), removed
+	result := b.String()
+
+	// Strip leading dashes to prevent flag injection (e.g., "--dangerously-skip-permissions")
+	result = strings.TrimLeft(result, "-")
+
+	return result, removed
 }
 
 func shouldRemove(r rune) bool {

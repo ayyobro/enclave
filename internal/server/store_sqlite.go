@@ -83,9 +83,9 @@ func (s *SQLiteStore) CreateUser(publicKey []byte, displayName string) (*User, e
 	}
 	id, _ := result.LastInsertId()
 	return &User{
-		ID:          id,
-		PublicKey:   publicKey,
-		DisplayName: displayName,
+		ID:           id,
+		PublicKey:    publicKey,
+		DisplayName:  displayName,
 		RegisteredAt: time.Now(),
 	}, nil
 }
