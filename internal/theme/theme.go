@@ -47,6 +47,32 @@ type Theme struct {
 // Current is the active theme.
 var Current = Dark
 
+// Available returns all theme names.
+func Available() []string {
+	return []string{"dark", "light", "dracula", "nord"}
+}
+
+// Get returns a theme by name, or Dark if not found.
+func Get(name string) Theme {
+	switch name {
+	case "dark":
+		return Dark
+	case "light":
+		return Light
+	case "dracula":
+		return Dracula
+	case "nord":
+		return Nord
+	default:
+		return Dark
+	}
+}
+
+// Set sets the current theme by name.
+func Set(name string) {
+	Current = Get(name)
+}
+
 // Styles provides pre-built lipgloss styles from the current theme.
 type Styles struct {
 	// Sidebar

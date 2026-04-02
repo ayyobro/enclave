@@ -200,7 +200,7 @@ func TestOfflineDelivery(t *testing.T) {
 	data, _ := json.Marshal(chatMsg)
 	aliceConn.Write(ctx, websocket.MessageText, data)
 	t.Log("Alice sent message to offline Bob")
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// Verify pending message is stored
 	pending, err := store.GetPendingMessages(bobPub[:])

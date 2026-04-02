@@ -17,10 +17,13 @@ var serveCmd = &cobra.Command{
 }
 
 var (
-	serveBind    string
-	serveDB      string
-	serveDataDir string
+	serveBind     string
+	serveDB       string
+	serveDataDir  string
 	serveLogLevel string
+	serveTLS      bool
+	serveTLSCert  string
+	serveTLSKey   string
 )
 
 func init() {
@@ -28,10 +31,12 @@ func init() {
 	serveCmd.Flags().StringVar(&serveDB, "db", "enclave-server.db", "Path to server database")
 	serveCmd.Flags().StringVar(&serveDataDir, "data-dir", ".", "Directory for server keys and data")
 	serveCmd.Flags().StringVar(&serveLogLevel, "log-level", "info", "Log level: debug, info, warn, error")
+	serveCmd.Flags().BoolVar(&serveTLS, "tls", false, "Enable TLS (auto-generates self-signed cert if none provided)")
+	serveCmd.Flags().StringVar(&serveTLSCert, "tls-cert", "", "Path to TLS certificate file")
+	serveCmd.Flags().StringVar(&serveTLSKey, "tls-key", "", "Path to TLS private key file")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	// Set up logging
 	var level slog.Level
 	switch serveLogLevel {
 	case "debug":
@@ -48,24 +53,33 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 
-	// Open store
 	store, err := server.NewSQLiteStore(serveDB)
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
 	defer store.Close()
 
-	// Create and start server
 	srv, err := server.NewServer(store, logger, serveDataDir)
 	if err != nil {
 		return fmt.Errorf("creating server: %w", err)
+	}
+
+	protocol := "ws"
+	if serveTLS || serveTLSCert != "" {
+		protocol = "wss"
 	}
 
 	fmt.Println()
 	fmt.Printf("  Admin key: %s\n", srv.AdminKey())
 	fmt.Println("  Use this key to generate invite tokens:")
 	fmt.Printf("  enclave invite --server %s --admin-key <key>\n", serveBind)
+	if protocol == "wss" {
+		fmt.Println("  TLS enabled")
+	}
 	fmt.Println()
 
+	if protocol == "wss" {
+		return srv.StartTLS(serveBind, serveTLSCert, serveTLSKey, serveDataDir)
+	}
 	return srv.Start(serveBind)
 }

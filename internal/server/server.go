@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -82,6 +83,26 @@ func (s *Server) Start(addr string) error {
 	}
 
 	s.logger.Info("enclave server started",
+		"address", listener.Addr().String(),
+		"server_key", base64.StdEncoding.EncodeToString(s.serverPub[:])[:16]+"...",
+	)
+
+	return s.Run(listener)
+}
+
+// StartTLS begins listening with TLS.
+func (s *Server) StartTLS(addr, certPath, keyPath, dataDir string) error {
+	tlsConfig, err := LoadOrGenerateTLSConfig(certPath, keyPath, dataDir)
+	if err != nil {
+		return fmt.Errorf("TLS setup: %w", err)
+	}
+
+	listener, err := tls.Listen("tcp", addr, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("TLS listen on %s: %w", addr, err)
+	}
+
+	s.logger.Info("enclave server started (TLS)",
 		"address", listener.Addr().String(),
 		"server_key", base64.StdEncoding.EncodeToString(s.serverPub[:])[:16]+"...",
 	)

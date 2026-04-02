@@ -2,10 +2,12 @@ package client
 
 import (
 	"context"
+	cryptotls "crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 // WSClient manages the WebSocket connection to the Enclave server.
 type WSClient struct {
 	serverAddr string
+	useTLS     bool
 	conn       *websocket.Conn
 	mu         sync.Mutex
 	logger     *slog.Logger
@@ -28,9 +31,10 @@ type WSClient struct {
 	closedRecv bool // track if RecvCh was already closed
 }
 
-func NewWSClient(serverAddr string, logger *slog.Logger) *WSClient {
+func NewWSClient(serverAddr string, useTLS bool, logger *slog.Logger) *WSClient {
 	return &WSClient{
 		serverAddr: serverAddr,
+		useTLS:     useTLS,
 		logger:     logger,
 		RecvCh:     make(chan []byte, 256),
 		sendCh:     make(chan []byte, 256),
@@ -39,8 +43,24 @@ func NewWSClient(serverAddr string, logger *slog.Logger) *WSClient {
 
 // Connect establishes the WebSocket connection.
 func (w *WSClient) Connect(ctx context.Context) error {
-	url := fmt.Sprintf("ws://%s/ws", w.serverAddr)
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	scheme := "ws"
+	if w.useTLS {
+		scheme = "wss"
+	}
+	url := fmt.Sprintf("%s://%s/ws", scheme, w.serverAddr)
+
+	opts := &websocket.DialOptions{}
+	if w.useTLS {
+		opts.HTTPClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &cryptotls.Config{
+					InsecureSkipVerify: true, // Accept self-signed certs
+				},
+			},
+		}
+	}
+
+	conn, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", url, err)
 	}

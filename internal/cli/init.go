@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	cryptotls "crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +27,7 @@ var (
 	initDisplayName string
 	initServer      string
 	initToken       string
+	initTLS         bool
 	initForce       bool
 )
 
@@ -32,6 +35,7 @@ func init() {
 	initCmd.Flags().StringVar(&initDisplayName, "display-name", "", "Your display name")
 	initCmd.Flags().StringVar(&initServer, "server", "localhost:9300", "Server address to connect to")
 	initCmd.Flags().StringVar(&initToken, "token", "", "Invite token from the server admin")
+	initCmd.Flags().BoolVar(&initTLS, "tls", false, "Connect to server using TLS")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing config and keys")
 }
 
@@ -68,11 +72,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Register with the server
 	fmt.Printf("  Registering with %s...\n", initServer)
-	if err := registerWithServer(initServer, pub, initDisplayName, initToken); err != nil {
+	if err := registerWithServer(initServer, initTLS, pub, initDisplayName, initToken); err != nil {
 		// Save config without registered=true so they can retry
 		cfg := config.Config{
 			DisplayName: initDisplayName,
-			Server:      config.ServerConfig{Address: initServer},
+			Server:      config.ServerConfig{Address: initServer, TLS: initTLS},
 			Registered:  false,
 		}
 		config.Save(cfg)
@@ -82,7 +86,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Save config with registered=true
 	cfg := config.Config{
 		DisplayName: initDisplayName,
-		Server:      config.ServerConfig{Address: initServer},
+		Server:      config.ServerConfig{Address: initServer, TLS: initTLS},
 		Registered:  true,
 	}
 	if err := config.Save(cfg); err != nil {
@@ -103,12 +107,24 @@ func runInit(cmd *cobra.Command, args []string) error {
 }
 
 // registerWithServer connects via WebSocket and sends a register message.
-func registerWithServer(serverAddr string, pub *[32]byte, displayName, token string) error {
+func registerWithServer(serverAddr string, useTLS bool, pub *[32]byte, displayName, token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("ws://%s/ws", serverAddr)
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	scheme := "ws"
+	opts := &websocket.DialOptions{}
+	if useTLS {
+		scheme = "wss"
+		opts.HTTPClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &cryptotls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
+	}
+	url := fmt.Sprintf("%s://%s/ws", scheme, serverAddr)
+	conn, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", serverAddr, err)
 	}
