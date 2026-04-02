@@ -180,6 +180,38 @@ type FileChunkMsg struct {
 	Ciphertext string `json:"ciphertext"`
 }
 
+// VibeStartMsg announces a collaborative coding session.
+type VibeStartMsg struct {
+	Type     string `json:"type"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to"` // DM recipient or group ID
+	RepoName string `json:"repo_name"`
+}
+
+// VibePromptMsg sends a prompt from a participant to the host's Claude Code.
+type VibePromptMsg struct {
+	Type   string `json:"type"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to"` // the host's public key
+	Prompt string `json:"prompt"`
+}
+
+// VibeOutputMsg streams Claude Code output from the host to participants.
+type VibeOutputMsg struct {
+	Type   string `json:"type"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to"` // DM recipient or group ID
+	Text   string `json:"text"`
+	IsDone bool   `json:"is_done"`
+}
+
+// VibeEndMsg ends a collaborative coding session.
+type VibeEndMsg struct {
+	Type string `json:"type"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to"`
+}
+
 // EphemeralMsg notifies the other party about ephemeral mode changes.
 type EphemeralMsg struct {
 	Type     string `json:"type"`

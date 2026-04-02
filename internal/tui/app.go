@@ -20,6 +20,7 @@ import (
 	"enclave/internal/crypto"
 	"enclave/internal/protocol"
 	"enclave/internal/store"
+	"enclave/internal/vibe"
 )
 
 // Screen identifies which screen is active.
@@ -44,6 +45,17 @@ type App struct {
 
 	// Ephemeral: conversation key -> duration. Zero means off.
 	ephemeralDurations map[string]time.Duration
+
+	// Vibe session state
+	vibeSession       *vibe.Session // non-nil if we're hosting
+	vibeHostKey       string        // pub key of the host (set on both host and participant)
+	vibeConvo         string        // conversation key where the vibe is active
+	vibePendingPrompt *vibePending  // prompt awaiting host approval
+}
+
+type vibePending struct {
+	FromName string
+	Prompt   string
 }
 
 // NewApp creates the root TUI application.
@@ -76,6 +88,33 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.mainView.SetSize(msg.Width, msg.Height)
 
 	case tea.KeyMsg:
+		// Handle vibe prompt approval/rejection
+		if a.vibePendingPrompt != nil {
+			switch msg.String() {
+			case "y", "Y":
+				pending := a.vibePendingPrompt
+				a.vibePendingPrompt = nil
+				a.mainView.chatView.AddSystemMessage(fmt.Sprintf("✅ Approved. Running prompt from %s...", pending.FromName))
+				if err := a.vibeSession.SendPrompt(pending.Prompt, pending.FromName); err != nil {
+					a.mainView.ShowError("Claude Code error: " + err.Error())
+				} else {
+					return a, a.pollVibeOutput()
+				}
+				return a, nil
+			case "n", "N":
+				pending := a.vibePendingPrompt
+				a.vibePendingPrompt = nil
+				a.mainView.chatView.AddSystemMessage(fmt.Sprintf("❌ Rejected prompt from %s.", pending.FromName))
+				// Notify the participant
+				if a.vibeConvo != "" {
+					a.appCore.SendVibeOutput(a.vibeConvo, fmt.Sprintf("❌ Host rejected the prompt: %s", pending.Prompt), true)
+				}
+				return a, nil
+			}
+			// Any other key is ignored while approval is pending
+			return a, nil
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			if a.appCore != nil {
@@ -193,6 +232,75 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.waitForMessage()
 
+	case *client.VibeStartEvent:
+		a.vibeHostKey = msg.From
+		a.vibeConvo = msg.To
+		a.mainView.chatView.AddSystemMessage(fmt.Sprintf("🎸 %s started a collaborative coding session on: %s\n   Use @claude <prompt> to send prompts.", msg.FromName, msg.RepoName))
+		return a, a.waitForMessage()
+
+	case *client.VibePromptEvent:
+		// We're the host — someone sent a prompt, sanitize and queue for approval
+		if a.vibeSession != nil && a.vibeSession.IsActive() {
+			sanitized, removed := vibe.SanitizePrompt(msg.Prompt)
+			warning := ""
+			if removed > 0 {
+				warning = fmt.Sprintf("\n   ⚠️  %d invisible/control characters were stripped from this prompt!", removed)
+			}
+			a.vibePendingPrompt = &vibePending{
+				FromName: msg.FromName,
+				Prompt:   sanitized,
+			}
+			a.mainView.chatView.AddSystemMessage(fmt.Sprintf(
+				"🔒 %s wants to run:\n   @claude %s%s\n\n   Press [y] to approve or [n] to reject",
+				msg.FromName, sanitized, warning,
+			))
+		}
+		return a, a.waitForMessage()
+
+	case *client.VibeOutputEvent:
+		// We're a participant — output from the host's Claude Code
+		if msg.Text != "" {
+			a.mainView.chatView.AddMessage(ChatMessage{
+				FromName:  "claude",
+				Text:      msg.Text,
+				Timestamp: time.Now(),
+			})
+		}
+		if msg.IsDone {
+			a.mainView.chatView.AddSystemMessage("[claude] Done.")
+		}
+		return a, a.waitForMessage()
+
+	case *client.VibeEndEvent:
+		a.vibeHostKey = ""
+		a.vibeConvo = ""
+		a.mainView.chatView.AddSystemMessage(fmt.Sprintf("🎸 %s ended the collaborative coding session.", msg.FromName))
+		return a, a.waitForMessage()
+
+	case VibeOutputLocalMsg:
+		// Output from our local Claude Code subprocess
+		to := a.vibeConvo
+		if msg.Text != "" {
+			a.mainView.chatView.AddMessage(ChatMessage{
+				FromName:  "claude",
+				Text:      msg.Text,
+				Timestamp: time.Now(),
+			})
+			// Forward to participants
+			if to != "" {
+				a.appCore.SendVibeOutput(to, msg.Text, false)
+			}
+		}
+		if msg.IsDone {
+			a.mainView.chatView.AddSystemMessage("[claude] Done.")
+			if to != "" {
+				a.appCore.SendVibeOutput(to, "", true)
+			}
+		} else {
+			// Keep polling
+			return a, a.pollVibeOutput()
+		}
+
 	case *client.FileMetaEvent:
 		a.mainView.chatView.AddSystemMessage(fmt.Sprintf("%s is sending file: %s (%d bytes, %d chunks)...", msg.FromName, msg.FileName, msg.FileSize, msg.TotalChunks))
 		return a, a.waitForMessage()
@@ -209,6 +317,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SendMessageCmd:
 		if a.appCore != nil && a.mainView.ActiveContact() != "" {
 			to := a.mainView.ActiveContact()
+
+			// Check for @claude prompt in an active vibe session
+			if a.vibeConvo == to && strings.HasPrefix(strings.ToLower(msg.Text), "@claude ") {
+				prompt := msg.Text[8:] // strip "@claude "
+
+				// Send as a normal chat message so everyone can see it
+				if a.appCore.IsGroup(to) {
+					a.appCore.SendGroupMessage(to, msg.Text)
+				} else {
+					a.appCore.SendMessage(to, msg.Text)
+				}
+				a.mainView.AddOwnMessage(to, msg.Text, time.Now())
+
+				if a.vibeSession != nil {
+					// We're the host — run it locally
+					a.mainView.chatView.AddSystemMessage("[claude] Processing...")
+					if err := a.vibeSession.SendPrompt(prompt, a.mainView.statusBar.identity); err != nil {
+						a.mainView.ShowError("Claude Code error: " + err.Error())
+					} else {
+						return a, a.pollVibeOutput()
+					}
+				} else if a.vibeHostKey != "" {
+					// We're a participant — send prompt to the host
+					a.appCore.SendVibePrompt(a.vibeHostKey, prompt)
+				}
+				return a, nil
+			}
+
 			var dbID int64
 			var err error
 			if a.appCore.IsGroup(to) {
@@ -255,6 +391,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return a, tea.Batch(cmds...)
+}
+
+func (a App) pollVibeOutput() tea.Cmd {
+	if a.vibeSession == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		event, ok := <-a.vibeSession.OutputCh
+		if !ok {
+			return VibeOutputLocalMsg{IsDone: true}
+		}
+		return VibeOutputLocalMsg{
+			Text:   event.Text,
+			IsDone: event.IsDone,
+		}
+	}
 }
 
 func (a App) scheduleEphemeralTick() tea.Cmd {
@@ -629,6 +781,58 @@ func (a *App) handleSlashCommand(name, args string) {
 			a.appCore.SendEphemeralNotice(active, args)
 			a.mainView.chatView.AddSystemMessage(fmt.Sprintf("Ephemeral mode enabled. Messages will disappear after %s.", dur))
 		}
+
+	case "/vibe2gether":
+		if args == "" {
+			a.mainView.ShowError("Usage: /vibe2gether <repo-path>")
+			return
+		}
+		active := a.mainView.ActiveContact()
+		if active == "" {
+			a.mainView.ShowError("No active conversation")
+			return
+		}
+		if a.vibeSession != nil {
+			a.mainView.ShowError("A vibe session is already active. Use /endvibe first.")
+			return
+		}
+
+		// Expand ~ to home directory
+		repoPath := args
+		if strings.HasPrefix(repoPath, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				repoPath = filepath.Join(home, repoPath[2:])
+			}
+		}
+		if _, err := os.Stat(repoPath); err != nil {
+			a.mainView.ShowError(fmt.Sprintf("Path not found: %s", repoPath))
+			return
+		}
+
+		// Start the session
+		session := vibe.NewSession(repoPath)
+		session.Activate()
+		a.vibeSession = session
+		a.vibeHostKey = a.myPubB64
+		a.vibeConvo = active
+
+		repoName := filepath.Base(repoPath)
+		a.appCore.SendVibeStart(active, repoName)
+		a.mainView.chatView.AddSystemMessage(fmt.Sprintf("🎸 Collaborative coding session started on: %s\n   Others can now use @claude <prompt> to send prompts.\n   Use /endvibe to stop.", repoName))
+
+	case "/endvibe":
+		if a.vibeSession == nil {
+			a.mainView.ShowError("No active vibe session")
+			return
+		}
+		a.vibeSession.Stop()
+		a.vibeSession = nil
+		if a.vibeConvo != "" {
+			a.appCore.SendVibeEnd(a.vibeConvo)
+		}
+		a.vibeHostKey = ""
+		a.vibeConvo = ""
+		a.mainView.chatView.AddSystemMessage("🎸 Collaborative coding session ended.")
 
 	case "/send":
 		if args == "" {
