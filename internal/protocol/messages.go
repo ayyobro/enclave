@@ -35,10 +35,11 @@ type ChallengeMsg struct {
 	ServerKey string `json:"server_key"`
 }
 
-// AuthOKMsg confirms successful authentication and provides the user list.
+// AuthOKMsg confirms successful authentication and provides the user list and groups.
 type AuthOKMsg struct {
-	Type  string     `json:"type"`
-	Users []UserInfo `json:"users"`
+	Type   string      `json:"type"`
+	Users  []UserInfo  `json:"users"`
+	Groups []GroupInfo `json:"groups,omitempty"`
 }
 
 // AuthFailMsg indicates authentication failure.
@@ -77,6 +78,114 @@ type TypingMsg struct {
 	Type string `json:"type"`
 	From string `json:"from,omitempty"`
 	To   string `json:"to"`
+}
+
+// GroupCreateMsg requests creation of a new group.
+type GroupCreateMsg struct {
+	Type    string   `json:"type"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"` // base64 public keys of initial members
+}
+
+// GroupCreatedMsg confirms group creation.
+type GroupCreatedMsg struct {
+	Type    string   `json:"type"`
+	GroupID string   `json:"group_id"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
+	Creator string   `json:"creator"`
+}
+
+// GroupInfoMsg provides group details (sent on connect).
+type GroupInfoMsg struct {
+	Type   string      `json:"type"`
+	Groups []GroupInfo `json:"groups"`
+}
+
+// GroupInfo describes a group.
+type GroupInfo struct {
+	GroupID string   `json:"group_id"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"` // base64 public keys
+}
+
+// GroupInviteMsg adds a member to a group.
+type GroupInviteMsg struct {
+	Type    string `json:"type"`
+	GroupID string `json:"group_id"`
+	Member  string `json:"member"` // base64 public key of invitee
+}
+
+// GroupLeaveMsg removes yourself from a group.
+type GroupLeaveMsg struct {
+	Type    string `json:"type"`
+	GroupID string `json:"group_id"`
+}
+
+// GroupChatMsg carries an encrypted message to a group.
+// The sender encrypts the plaintext once per recipient.
+type GroupChatMsg struct {
+	Type       string              `json:"type"`
+	From       string              `json:"from,omitempty"`
+	GroupID    string              `json:"group_id"`
+	Recipients []GroupChatRecipient `json:"recipients"`
+	ID         int64               `json:"id,omitempty"`
+	Timestamp  int64               `json:"ts,omitempty"`
+}
+
+// GroupChatRecipient holds the per-recipient encrypted payload.
+type GroupChatRecipient struct {
+	To         string `json:"to"`
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
+}
+
+// ReadReceiptMsg acknowledges that a message has been read.
+type ReadReceiptMsg struct {
+	Type      string `json:"type"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to"`
+	MessageTS int64  `json:"message_ts"` // timestamp of the read message
+}
+
+// ReactionMsg adds a reaction to a message.
+type ReactionMsg struct {
+	Type      string `json:"type"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to"`        // recipient or group_id
+	MessageTS int64  `json:"message_ts"` // timestamp of the message being reacted to
+	Emoji     string `json:"emoji"`
+}
+
+// FileMetaMsg announces an incoming file transfer.
+type FileMetaMsg struct {
+	Type       string `json:"type"`
+	From       string `json:"from,omitempty"`
+	To         string `json:"to"`
+	FileID     string `json:"file_id"`
+	FileName   string `json:"file_name"`
+	FileSize   int64  `json:"file_size"`
+	Nonce      string `json:"nonce"`
+	TotalChunks int   `json:"total_chunks"`
+}
+
+// FileChunkMsg carries one encrypted chunk of a file.
+type FileChunkMsg struct {
+	Type       string `json:"type"`
+	From       string `json:"from,omitempty"`
+	To         string `json:"to"`
+	FileID     string `json:"file_id"`
+	ChunkIndex int    `json:"chunk_index"`
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
+}
+
+// EphemeralMsg notifies the other party about ephemeral mode changes.
+type EphemeralMsg struct {
+	Type     string `json:"type"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to"`
+	Duration string `json:"duration"` // Go duration string, or "off"
 }
 
 // ErrorMsg is sent by the server to report errors.

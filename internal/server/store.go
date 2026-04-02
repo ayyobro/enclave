@@ -30,6 +30,20 @@ type InviteToken struct {
 	CreatedAt time.Time
 }
 
+// Group represents a chat group.
+type Group struct {
+	ID        string
+	Name      string
+	Creator   string // base64 public key
+	CreatedAt time.Time
+}
+
+// GroupMember represents a member of a group.
+type GroupMember struct {
+	GroupID   string
+	PublicKey []byte
+}
+
 // Store defines the server-side storage interface.
 type Store interface {
 	// Users
@@ -45,6 +59,14 @@ type Store interface {
 	StorePendingMessage(senderKey, recipientKey, nonce, ciphertext []byte) (int64, error)
 	GetPendingMessages(recipientKey []byte) ([]PendingMessage, error)
 	DeletePendingMessage(id int64) error
+
+	// Groups
+	CreateGroup(id, name, creatorKey string, memberKeys []string) error
+	GetGroup(id string) (*Group, error)
+	GetGroupMembers(groupID string) ([]string, error) // returns base64 public keys
+	GetUserGroups(publicKey string) ([]Group, error)
+	AddGroupMember(groupID, publicKey string) error
+	RemoveGroupMember(groupID, publicKey string) error
 
 	// Lifecycle
 	Close() error

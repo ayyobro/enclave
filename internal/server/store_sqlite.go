@@ -55,6 +55,19 @@ func (s *SQLiteStore) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_pending_recipient ON pending_messages(recipient_key);
+
+	CREATE TABLE IF NOT EXISTS groups (
+		id         TEXT PRIMARY KEY,
+		name       TEXT NOT NULL,
+		creator    TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS group_members (
+		group_id   TEXT NOT NULL REFERENCES groups(id),
+		public_key TEXT NOT NULL,
+		PRIMARY KEY (group_id, public_key)
+	);
 	`
 	_, err := s.db.Exec(schema)
 	return err
@@ -186,6 +199,88 @@ func (s *SQLiteStore) GetPendingMessages(recipientKey []byte) ([]PendingMessage,
 
 func (s *SQLiteStore) DeletePendingMessage(id int64) error {
 	_, err := s.db.Exec("DELETE FROM pending_messages WHERE id = ?", id)
+	return err
+}
+
+func (s *SQLiteStore) CreateGroup(id, name, creatorKey string, memberKeys []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("INSERT INTO groups (id, name, creator) VALUES (?, ?, ?)", id, name, creatorKey)
+	if err != nil {
+		return err
+	}
+
+	for _, key := range memberKeys {
+		_, err = tx.Exec("INSERT INTO group_members (group_id, public_key) VALUES (?, ?)", id, key)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetGroup(id string) (*Group, error) {
+	var g Group
+	err := s.db.QueryRow("SELECT id, name, creator, created_at FROM groups WHERE id = ?", id).
+		Scan(&g.ID, &g.Name, &g.Creator, &g.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
+func (s *SQLiteStore) GetGroupMembers(groupID string) ([]string, error) {
+	rows, err := s.db.Query("SELECT public_key FROM group_members WHERE group_id = ?", groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func (s *SQLiteStore) GetUserGroups(publicKey string) ([]Group, error) {
+	rows, err := s.db.Query(
+		`SELECT g.id, g.name, g.creator, g.created_at FROM groups g
+		 JOIN group_members gm ON g.id = gm.group_id
+		 WHERE gm.public_key = ?`, publicKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []Group
+	for rows.Next() {
+		var g Group
+		if err := rows.Scan(&g.ID, &g.Name, &g.Creator, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+	return groups, rows.Err()
+}
+
+func (s *SQLiteStore) AddGroupMember(groupID, publicKey string) error {
+	_, err := s.db.Exec("INSERT OR IGNORE INTO group_members (group_id, public_key) VALUES (?, ?)", groupID, publicKey)
+	return err
+}
+
+func (s *SQLiteStore) RemoveGroupMember(groupID, publicKey string) error {
+	_, err := s.db.Exec("DELETE FROM group_members WHERE group_id = ? AND public_key = ?", groupID, publicKey)
 	return err
 }
 

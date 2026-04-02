@@ -108,7 +108,11 @@ func (m ContactDetailModel) View() string {
 	lines = append(lines, titleStyle.Render("  Contact: "+m.contact.DisplayName))
 	lines = append(lines, "")
 	lines = append(lines, fmt.Sprintf("  %s%s", labelStyle.Render("Status:"), status))
-	lines = append(lines, fmt.Sprintf("  %s%s", labelStyle.Render("Public key:"), valueStyle.Render(m.contact.PublicKey[:22]+"...")))
+	keyDisplay := m.contact.PublicKey
+	if len(keyDisplay) > 22 {
+		keyDisplay = keyDisplay[:22] + "..."
+	}
+	lines = append(lines, fmt.Sprintf("  %s%s", labelStyle.Render("Public key:"), valueStyle.Render(keyDisplay)))
 	lines = append(lines, "")
 	lines = append(lines, fmt.Sprintf("  %s%s", labelStyle.Render("Fingerprint:"), valueStyle.Render(fpLine1)))
 	if fpLine2 != "" {

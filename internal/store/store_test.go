@@ -55,15 +55,15 @@ func TestMessagePersistence(t *testing.T) {
 
 	// Save messages
 	now := time.Now()
-	m1, err := s.SaveMessage(c.ID, Sent, "Hello Bob", now.Add(-2*time.Minute), 0)
+	m1, err := s.SaveMessage(c.ID, Sent, "me", "Hello Bob", now.Add(-2*time.Minute), 0)
 	if err != nil {
 		t.Fatalf("save m1: %v", err)
 	}
-	m2, err := s.SaveMessage(c.ID, Received, "Hey Alice!", now.Add(-1*time.Minute), 101)
+	m2, err := s.SaveMessage(c.ID, Received, "bob", "Hey Alice!", now.Add(-1*time.Minute), 101)
 	if err != nil {
 		t.Fatalf("save m2: %v", err)
 	}
-	m3, err := s.SaveMessage(c.ID, Sent, "How's it going?", now, 0)
+	m3, err := s.SaveMessage(c.ID, Sent, "me", "How's it going?", now, 0)
 	if err != nil {
 		t.Fatalf("save m3: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestDeduplication(t *testing.T) {
 	defer s.Close()
 
 	c, _ := s.GetOrCreateConversation("key-bob", "bob")
-	s.SaveMessage(c.ID, Received, "hello", time.Now(), 42)
+	s.SaveMessage(c.ID, Received, "bob", "hello", time.Now(), 42)
 
 	has, err := s.HasServerMessage(42)
 	if err != nil {
@@ -157,10 +157,10 @@ func TestSearch(t *testing.T) {
 	c1, _ := s.GetOrCreateConversation("key-alice", "alice")
 	c2, _ := s.GetOrCreateConversation("key-bob", "bob")
 
-	s.SaveMessage(c1.ID, Sent, "The deployment is ready", time.Now(), 0)
-	s.SaveMessage(c1.ID, Received, "Great, let me check the staging server", time.Now(), 0)
-	s.SaveMessage(c2.ID, Sent, "Can you review the pull request?", time.Now(), 0)
-	s.SaveMessage(c2.ID, Received, "The server looks good to me", time.Now(), 0)
+	s.SaveMessage(c1.ID, Sent, "me", "The deployment is ready", time.Now(), 0)
+	s.SaveMessage(c1.ID, Received, "alice", "Great, let me check the staging server", time.Now(), 0)
+	s.SaveMessage(c2.ID, Sent, "me", "Can you review the pull request?", time.Now(), 0)
+	s.SaveMessage(c2.ID, Received, "bob", "The server looks good to me", time.Now(), 0)
 
 	// Search for "server"
 	results, err := s.SearchMessages("server", 10)

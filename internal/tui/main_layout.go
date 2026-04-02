@@ -74,17 +74,21 @@ func (m *MainModel) SetContacts(contacts []ContactInfo) {
 }
 
 func (m *MainModel) AddIncomingMessage(from, fromName, text string, ts time.Time) {
-	// Clear typing indicator — they sent a message, so they stopped typing
+	m.AddIncomingMessageWithID(from, fromName, text, ts, 0)
+}
+
+func (m *MainModel) AddIncomingMessageWithID(from, fromName, text string, ts time.Time, dbID int64) {
 	if from == m.activeContact {
 		m.chatView.ClearTyping()
 	}
 	if from == m.activeContact {
 		m.chatView.AddMessage(ChatMessage{
-			From:      from,
-			FromName:  fromName,
-			Text:      text,
-			Timestamp: ts,
-			IsOwn:     false,
+			DBMessageID: dbID,
+			From:        from,
+			FromName:    fromName,
+			Text:        text,
+			Timestamp:   ts,
+			IsOwn:       false,
 		})
 		m.sidebar.ClearUnread(from)
 	} else {
@@ -93,11 +97,16 @@ func (m *MainModel) AddIncomingMessage(from, fromName, text string, ts time.Time
 }
 
 func (m *MainModel) AddOwnMessage(to, text string, ts time.Time) {
+	m.AddOwnMessageWithID(to, text, ts, 0)
+}
+
+func (m *MainModel) AddOwnMessageWithID(to, text string, ts time.Time, dbID int64) {
 	if to == m.activeContact {
 		m.chatView.AddMessage(ChatMessage{
-			Text:      text,
-			Timestamp: ts,
-			IsOwn:     true,
+			DBMessageID: dbID,
+			Text:        text,
+			Timestamp:   ts,
+			IsOwn:       true,
 		})
 	}
 }

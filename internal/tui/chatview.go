@@ -19,12 +19,23 @@ import (
 
 // ChatMessage represents a single rendered message in the chat.
 type ChatMessage struct {
-	From      string
-	FromName  string
-	Text      string
-	Timestamp time.Time
-	IsOwn     bool
-	IsSystem  bool
+	DBMessageID int64  // local database ID for reactions/pins
+	From        string
+	FromName    string
+	Text        string
+	Timestamp   time.Time
+	ExpiresAt   time.Time // zero means no expiry
+	IsOwn       bool
+	IsSystem    bool
+	Read        bool
+	Reactions   []MessageReaction
+	Pinned      bool
+}
+
+// MessageReaction is an emoji reaction on a message.
+type MessageReaction struct {
+	FromName string
+	Emoji    string
 }
 
 // CodeBlock stores a code block's raw content for clipboard copying.
@@ -82,6 +93,16 @@ func (m *ChatViewModel) AddMessage(msg ChatMessage) {
 	m.viewport.GotoBottom()
 }
 
+// SetLastMessageExpiry sets the ExpiresAt on the most recent non-system message.
+func (m *ChatViewModel) SetLastMessageExpiry(expiresAt time.Time) {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if !m.messages[i].IsSystem {
+			m.messages[i].ExpiresAt = expiresAt
+			return
+		}
+	}
+}
+
 func (m *ChatViewModel) AddSystemMessage(text string) {
 	m.messages = append(m.messages, ChatMessage{
 		Text:      text,
@@ -90,6 +111,80 @@ func (m *ChatViewModel) AddSystemMessage(text string) {
 	})
 	m.refreshContent()
 	m.viewport.GotoBottom()
+}
+
+// MarkRead marks sent messages at or before the given timestamp as read.
+func (m *ChatViewModel) MarkRead(messageTS int64) {
+	ts := time.Unix(messageTS, 0)
+	changed := false
+	for i := range m.messages {
+		if m.messages[i].IsOwn && !m.messages[i].Read && !m.messages[i].Timestamp.After(ts) {
+			m.messages[i].Read = true
+			changed = true
+		}
+	}
+	if changed {
+		m.refreshContent()
+	}
+}
+
+// AddReaction adds a reaction to the message closest to the given timestamp.
+// Returns the matched message's DB ID (0 if not found).
+func (m *ChatViewModel) AddReaction(messageTS int64, fromName, emoji string) int64 {
+	ts := time.Unix(messageTS, 0)
+	bestIdx := -1
+	bestDiff := time.Duration(1<<63 - 1)
+	for i := range m.messages {
+		if m.messages[i].IsSystem {
+			continue
+		}
+		diff := m.messages[i].Timestamp.Sub(ts)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < bestDiff {
+			bestDiff = diff
+			bestIdx = i
+		}
+	}
+	if bestIdx >= 0 {
+		m.messages[bestIdx].Reactions = append(m.messages[bestIdx].Reactions, MessageReaction{
+			FromName: fromName,
+			Emoji:    emoji,
+		})
+		m.refreshContent()
+		return m.messages[bestIdx].DBMessageID
+	}
+	return 0
+}
+
+// GetLastMessage returns the most recent non-system message (for reactions/pins).
+func (m *ChatViewModel) GetLastMessage() *ChatMessage {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if !m.messages[i].IsSystem {
+			return &m.messages[i]
+		}
+	}
+	return nil
+}
+
+// PurgeExpired removes messages past their ExpiresAt time. Returns true if any were removed.
+func (m *ChatViewModel) PurgeExpired() bool {
+	now := time.Now()
+	var kept []ChatMessage
+	removed := false
+	for _, msg := range m.messages {
+		if !msg.ExpiresAt.IsZero() && now.After(msg.ExpiresAt) {
+			removed = true
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	if removed {
+		m.messages = kept
+		m.refreshContent()
+	}
+	return removed
 }
 
 func (m *ChatViewModel) SetTyping(fromName string) {
@@ -182,13 +277,46 @@ func (m *ChatViewModel) refreshContent() {
 		}
 
 		ts := formatTimestamp(msg.Timestamp)
-		header := fmt.Sprintf("%s %s", nameStyle.Render(name), s.TimestampStyle.Render("· "+ts))
+		// Read receipt indicator for own messages
+		readIndicator := ""
+		if msg.IsOwn {
+			if msg.Read {
+				readIndicator = s.OnlineIndicator.Render(" ✓✓")
+			} else {
+				readIndicator = s.Subtle.Render(" ✓")
+			}
+		}
+		// Pin indicator
+		pinIndicator := ""
+		if msg.Pinned {
+			pinIndicator = lipgloss.NewStyle().Foreground(t.Warning).Render(" 📌")
+		}
+		// Ephemeral indicator
+		ephemeralIndicator := ""
+		if !msg.ExpiresAt.IsZero() {
+			remaining := time.Until(msg.ExpiresAt)
+			if remaining > 0 {
+				ephemeralIndicator = s.Subtle.Render(fmt.Sprintf(" ⏱ %s", remaining.Round(time.Second)))
+			}
+		}
+
+		header := fmt.Sprintf("%s %s%s%s%s", nameStyle.Render(name), s.TimestampStyle.Render("· "+ts), readIndicator, pinIndicator, ephemeralIndicator)
 
 		lines = append(lines, "  "+header)
 		rendered := renderMessageText(msg.Text, m.viewport.Width-4, s, t, &blockNum, &m.codeBlocks)
 		for _, rl := range rendered {
 			lines = append(lines, "  "+rl)
 		}
+
+		// Reactions
+		if len(msg.Reactions) > 0 {
+			var reacts []string
+			for _, r := range msg.Reactions {
+				reacts = append(reacts, fmt.Sprintf("%s %s", r.Emoji, s.Subtle.Render(r.FromName)))
+			}
+			lines = append(lines, "  "+strings.Join(reacts, "  "))
+		}
+
 		lines = append(lines, "")
 	}
 
@@ -238,7 +366,7 @@ func renderMessageText(text string, width int, s theme.Styles, t theme.Theme, bl
 			// Render text before the fence
 			if fenceStart > 0 {
 				before := remaining[:fenceStart]
-				result = append(result, renderInlineCode(before, width, s)...)
+				result = append(result, renderInlineCode(before, width, s, t)...)
 			}
 
 			// Find closing fence
@@ -278,7 +406,7 @@ func renderMessageText(text string, width int, s theme.Styles, t theme.Theme, bl
 		}
 
 		// No more fenced blocks — render rest with inline code support
-		result = append(result, renderInlineCode(remaining, width, s)...)
+		result = append(result, renderInlineCode(remaining, width, s, t)...)
 		break
 	}
 
@@ -351,53 +479,102 @@ func max(a, b int) int {
 	return b
 }
 
-// renderInlineCode parses text for `code` segments and renders them.
-func renderInlineCode(text string, width int, styles theme.Styles) []string {
+// renderInlineCode parses text for `code` segments, diffs, and URLs.
+func renderInlineCode(text string, width int, s theme.Styles, t theme.Theme) []string {
 	var result []string
 
 	for _, line := range strings.Split(text, "\n") {
 		wrapped := wordWrap(line, width)
 		for _, wl := range strings.Split(wrapped, "\n") {
-			result = append(result, renderInlineCodeLine(wl, styles))
+			result = append(result, renderInlineCodeLine(wl, s, t))
 		}
 	}
 
 	return result
 }
 
-// renderInlineCodeLine handles a single line, styling `code` spans.
-func renderInlineCodeLine(line string, styles theme.Styles) string {
+// renderInlineCodeLine handles a single line, styling `code` spans, diffs, and URLs.
+func renderInlineCodeLine(line string, s theme.Styles, t theme.Theme) string {
+	// Check for diff lines first (they style the whole line)
+	if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+		return lipgloss.NewStyle().Foreground(t.Success).Render(line)
+	}
+	if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+		return lipgloss.NewStyle().Foreground(t.Error).Render(line)
+	}
+	if strings.HasPrefix(line, "@@") {
+		return lipgloss.NewStyle().Foreground(t.Info).Render(line)
+	}
+	if strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
+		return lipgloss.NewStyle().Foreground(t.ForegroundDim).Bold(true).Render(line)
+	}
+
+	// Handle inline code + URLs
 	var out strings.Builder
 	remaining := line
 
 	for {
 		tick := strings.IndexByte(remaining, '`')
 		if tick == -1 {
-			out.WriteString(styles.MessageBody.Render(remaining))
+			out.WriteString(renderURLs(remaining, s, t))
 			break
 		}
 
-		// Render text before the backtick
 		if tick > 0 {
-			out.WriteString(styles.MessageBody.Render(remaining[:tick]))
+			out.WriteString(renderURLs(remaining[:tick], s, t))
 		}
 
-		// Find closing backtick
 		afterTick := remaining[tick+1:]
 		closeTick := strings.IndexByte(afterTick, '`')
 		if closeTick == -1 {
-			// No closing backtick — render the rest as plain text
-			out.WriteString(styles.MessageBody.Render(remaining[tick:]))
+			out.WriteString(renderURLs(remaining[tick:], s, t))
 			break
 		}
 
-		// Render inline code
 		code := afterTick[:closeTick]
-		out.WriteString(styles.InlineCode.Render(" " + code + " "))
+		out.WriteString(s.InlineCode.Render(" " + code + " "))
 		remaining = afterTick[closeTick+1:]
 	}
 
 	return out.String()
+}
+
+// renderURLs detects URLs in a line and makes them styled (and clickable via OSC 8 in supporting terminals).
+func renderURLs(line string, s theme.Styles, t theme.Theme) string {
+	urlStyle := lipgloss.NewStyle().Foreground(t.Info).Underline(true)
+
+	var result strings.Builder
+	remaining := line
+	for {
+		// Simple URL detection
+		idx := strings.Index(remaining, "http://")
+		if i := strings.Index(remaining, "https://"); i >= 0 && (idx < 0 || i < idx) {
+			idx = i
+		}
+		if idx < 0 {
+			result.WriteString(s.MessageBody.Render(remaining))
+			break
+		}
+
+		// Render text before URL
+		if idx > 0 {
+			result.WriteString(s.MessageBody.Render(remaining[:idx]))
+		}
+
+		// Find end of URL (space, newline, or end of string)
+		urlPart := remaining[idx:]
+		endIdx := strings.IndexAny(urlPart, " \t\n\r>)],;")
+		if endIdx < 0 {
+			endIdx = len(urlPart)
+		}
+		url := urlPart[:endIdx]
+
+		// OSC 8 hyperlink: \033]8;;URL\033\\TEXT\033]8;;\033\\
+		result.WriteString(fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, urlStyle.Render(url)))
+
+		remaining = urlPart[endIdx:]
+	}
+	return result.String()
 }
 
 func formatTimestamp(t time.Time) string {

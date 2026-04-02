@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"enclave/internal/server"
+	"enclave/internal/sshgw"
 )
 
 var serveCmd = &cobra.Command{
@@ -24,6 +26,8 @@ var (
 	serveTLS      bool
 	serveTLSCert  string
 	serveTLSKey   string
+	serveSSH      bool
+	serveSSHBind  string
 )
 
 func init() {
@@ -34,6 +38,8 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveTLS, "tls", false, "Enable TLS (auto-generates self-signed cert if none provided)")
 	serveCmd.Flags().StringVar(&serveTLSCert, "tls-cert", "", "Path to TLS certificate file")
 	serveCmd.Flags().StringVar(&serveTLSKey, "tls-key", "", "Path to TLS private key file")
+	serveCmd.Flags().BoolVar(&serveSSH, "ssh", false, "Enable SSH gateway for TUI access")
+	serveCmd.Flags().StringVar(&serveSSHBind, "ssh-bind", "0.0.0.0:2222", "SSH gateway listen address")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -77,6 +83,21 @@ func runServe(cmd *cobra.Command, args []string) error {
 		fmt.Println("  TLS enabled")
 	}
 	fmt.Println()
+
+	// Start SSH gateway if enabled
+	if serveSSH {
+		sshSrv, err := sshgw.NewSSHServer(serveSSHBind, serveBind, serveDataDir, logger)
+		if err != nil {
+			return fmt.Errorf("creating SSH gateway: %w", err)
+		}
+		fmt.Printf("  SSH gateway: ssh <user>@<host> -p %s\n", serveSSHBind[strings.LastIndex(serveSSHBind, ":")+1:])
+		fmt.Println()
+		go func() {
+			if err := sshSrv.Start(); err != nil {
+				logger.Error("SSH gateway error", "error", err)
+			}
+		}()
+	}
 
 	if protocol == "wss" {
 		return srv.StartTLS(serveBind, serveTLSCert, serveTLSKey, serveDataDir)
