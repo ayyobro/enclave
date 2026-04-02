@@ -106,6 +106,14 @@ func (h *Hub) handleMessage(msg clientMessage) {
 		h.routeDirectRelay(msg, protocol.TypeFileChunk)
 	case protocol.TypeEphemeral:
 		h.routeDirectRelay(msg, protocol.TypeEphemeral)
+	case protocol.TypeVibeStart:
+		h.routeDirectRelay(msg, protocol.TypeVibeStart)
+	case protocol.TypeVibePrompt:
+		h.routeDirectRelay(msg, protocol.TypeVibePrompt)
+	case protocol.TypeVibeOutput:
+		h.routeDirectRelay(msg, protocol.TypeVibeOutput)
+	case protocol.TypeVibeEnd:
+		h.routeDirectRelay(msg, protocol.TypeVibeEnd)
 	case protocol.TypeGroupCreate:
 		h.handleGroupCreate(msg)
 	case protocol.TypeGroupInvite:

@@ -63,6 +63,12 @@ type TypingClearTickMsg struct{}
 // EphemeralTickMsg fires periodically to purge expired ephemeral messages.
 type EphemeralTickMsg struct{}
 
+// VibeOutputLocalMsg carries output from the local Claude Code subprocess.
+type VibeOutputLocalMsg struct {
+	Text   string
+	IsDone bool
+}
+
 // FocusPane identifies which pane has focus.
 type FocusPane int
 

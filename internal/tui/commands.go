@@ -25,6 +25,8 @@ var Commands = []SlashCommand{
 	{Name: "/pin", Description: "Pin the last message or code block"},
 	{Name: "/pins", Description: "List all pinned messages"},
 	{Name: "/ephemeral", Description: "Toggle disappearing messages", HasArgs: true},
+	{Name: "/vibe2gether", Description: "Start collaborative Claude Code session", HasArgs: true},
+	{Name: "/endvibe", Description: "End the collaborative coding session"},
 	{Name: "/export", Description: "Save conversation to a file"},
 	{Name: "/quit", Description: "Exit Enclave"},
 }

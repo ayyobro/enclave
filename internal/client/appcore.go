@@ -109,7 +109,31 @@ type pendingFile struct {
 type EphemeralEvent struct {
 	From     string
 	FromName string
-	Duration string // Go duration string, or "off"
+	Duration string
+}
+
+type VibeStartEvent struct {
+	From     string
+	FromName string
+	To       string // conversation key (host pubkey for DM, group ID for groups)
+	RepoName string
+}
+
+type VibePromptEvent struct {
+	From     string
+	FromName string
+	Prompt   string
+}
+
+type VibeOutputEvent struct {
+	From   string
+	Text   string
+	IsDone bool
+}
+
+type VibeEndEvent struct {
+	From     string
+	FromName string
 }
 
 type ContactEntry struct {
@@ -416,6 +440,14 @@ func (a *AppCore) ProcessIncoming(data []byte) interface{} {
 		return a.processFileChunk(data)
 	case protocol.TypeEphemeral:
 		return a.processEphemeral(data)
+	case protocol.TypeVibeStart:
+		return a.processVibeStart(data)
+	case protocol.TypeVibePrompt:
+		return a.processVibePrompt(data)
+	case protocol.TypeVibeOutput:
+		return a.processVibeOutput(data)
+	case protocol.TypeVibeEnd:
+		return a.processVibeEnd(data)
 	case protocol.TypeError:
 		var errMsg protocol.ErrorMsg
 		json.Unmarshal(data, &errMsg)
@@ -710,6 +742,85 @@ func (a *AppCore) processEphemeral(data []byte) interface{} {
 		FromName: fromName,
 		Duration: msg.Duration,
 	}
+}
+
+func (a *AppCore) processVibeStart(data []byte) interface{} {
+	var msg protocol.VibeStartMsg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil
+	}
+	fromName := a.contactNames[msg.From]
+	if fromName == "" {
+		fromName = msg.From[:12] + "..."
+	}
+	// For DMs, the conversation key on the participant side is the host's pubkey
+	// For groups, the conversation key is the group ID
+	convoKey := msg.From
+	if _, isGroup := a.groupMembers[msg.To]; isGroup {
+		convoKey = msg.To
+	}
+
+	return &VibeStartEvent{From: msg.From, FromName: fromName, To: convoKey, RepoName: msg.RepoName}
+}
+
+func (a *AppCore) processVibePrompt(data []byte) interface{} {
+	var msg protocol.VibePromptMsg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil
+	}
+	fromName := a.contactNames[msg.From]
+	if fromName == "" {
+		fromName = msg.From[:12] + "..."
+	}
+	return &VibePromptEvent{From: msg.From, FromName: fromName, Prompt: msg.Prompt}
+}
+
+func (a *AppCore) processVibeOutput(data []byte) interface{} {
+	var msg protocol.VibeOutputMsg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil
+	}
+	return &VibeOutputEvent{From: msg.From, Text: msg.Text, IsDone: msg.IsDone}
+}
+
+func (a *AppCore) processVibeEnd(data []byte) interface{} {
+	var msg protocol.VibeEndMsg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil
+	}
+	fromName := a.contactNames[msg.From]
+	if fromName == "" {
+		fromName = msg.From[:12] + "..."
+	}
+	return &VibeEndEvent{From: msg.From, FromName: fromName}
+}
+
+// SendVibeStart announces a vibe session.
+func (a *AppCore) SendVibeStart(to, repoName string) {
+	msg := protocol.VibeStartMsg{Type: protocol.TypeVibeStart, To: to, RepoName: repoName}
+	data, _ := json.Marshal(msg)
+	a.ws.Send(data)
+}
+
+// SendVibePrompt sends a prompt to the host.
+func (a *AppCore) SendVibePrompt(to, prompt string) {
+	msg := protocol.VibePromptMsg{Type: protocol.TypeVibePrompt, To: to, Prompt: prompt}
+	data, _ := json.Marshal(msg)
+	a.ws.Send(data)
+}
+
+// SendVibeOutput streams Claude Code output to participants.
+func (a *AppCore) SendVibeOutput(to, text string, isDone bool) {
+	msg := protocol.VibeOutputMsg{Type: protocol.TypeVibeOutput, To: to, Text: text, IsDone: isDone}
+	data, _ := json.Marshal(msg)
+	a.ws.Send(data)
+}
+
+// SendVibeEnd announces session end.
+func (a *AppCore) SendVibeEnd(to string) {
+	msg := protocol.VibeEndMsg{Type: protocol.TypeVibeEnd, To: to}
+	data, _ := json.Marshal(msg)
+	a.ws.Send(data)
 }
 
 // SendEphemeralNotice notifies the other party about ephemeral mode.

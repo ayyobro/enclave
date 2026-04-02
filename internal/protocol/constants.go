@@ -19,6 +19,10 @@ const (
 	TypeGroupInvite  = "group_invite"
 	TypeGroupLeave   = "group_leave"
 	TypeEphemeral    = "ephemeral"
+	TypeVibeStart    = "vibe_start"
+	TypeVibePrompt   = "vibe_prompt"
+	TypeVibeOutput   = "vibe_output"
+	TypeVibeEnd      = "vibe_end"
 
 	// Message types (server -> client)
 	TypeChallenge    = "challenge"
