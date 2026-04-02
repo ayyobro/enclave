@@ -21,11 +21,12 @@ type ReconnectingMsg struct {
 	Attempt int
 }
 
-// ContactInfo represents a known contact for display.
+// ContactInfo represents a known contact or group for display.
 type ContactInfo struct {
-	PublicKey    string
+	PublicKey    string // public key for DMs, group ID for groups
 	DisplayName string
 	Online      bool
+	IsGroup     bool
 	UnreadCount int
 	LastMessage string
 	LastMsgTime time.Time
@@ -58,6 +59,9 @@ type UserTypingMsg struct{}
 
 // TypingClearTickMsg fires after a delay to clear the typing indicator.
 type TypingClearTickMsg struct{}
+
+// EphemeralTickMsg fires periodically to purge expired ephemeral messages.
+type EphemeralTickMsg struct{}
 
 // FocusPane identifies which pane has focus.
 type FocusPane int

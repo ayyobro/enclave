@@ -57,21 +57,21 @@ func TestAppCoreConnectAndChat(t *testing.T) {
 	defer bobCore.Close()
 
 	// Alice registers
-	aliceContacts, err := aliceCore.ConnectAndAuth(tok1)
+	aliceResult, err := aliceCore.ConnectAndAuth(tok1)
 	if err != nil {
 		t.Fatalf("alice connect: %v", err)
 	}
-	t.Logf("Alice connected, contacts: %d", len(aliceContacts))
+	t.Logf("Alice connected, contacts: %d", len(aliceResult.Contacts))
 
 	// Bob registers
-	bobContacts, err := bobCore.ConnectAndAuth(tok2)
+	bobResult, err := bobCore.ConnectAndAuth(tok2)
 	if err != nil {
 		t.Fatalf("bob connect: %v", err)
 	}
-	t.Logf("Bob connected, contacts: %d", len(bobContacts))
+	t.Logf("Bob connected, contacts: %d", len(bobResult.Contacts))
 
 	// Alice should see bob as a contact
-	if len(bobContacts) == 0 {
+	if len(bobResult.Contacts) == 0 {
 		t.Log("Bob sees no contacts yet (alice registered first, bob wasn't online)")
 	}
 
@@ -79,7 +79,7 @@ func TestAppCoreConnectAndChat(t *testing.T) {
 
 	// Alice sends a message to Bob
 	bobPubB64 := base64.StdEncoding.EncodeToString(bobPub[:])
-	err = aliceCore.SendMessage(bobPubB64, "Hello Bob from Alice!")
+	_, err = aliceCore.SendMessage(bobPubB64, "Hello Bob from Alice!")
 	if err != nil {
 		t.Fatalf("alice send: %v", err)
 	}

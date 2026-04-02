@@ -124,9 +124,11 @@ func (m SidebarModel) View() string {
 			break
 		}
 
-		// Online indicator
+		// Online indicator (groups show # instead)
 		var indicator string
-		if c.Online {
+		if c.IsGroup {
+			indicator = lipgloss.NewStyle().Foreground(t.Secondary).Render("#")
+		} else if c.Online {
 			indicator = styles.OnlineIndicator.Render("●")
 		} else {
 			indicator = styles.OfflineIndicator.Render("○")

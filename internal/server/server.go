@@ -271,10 +271,13 @@ func (s *Server) handleAuth(ctx context.Context, conn *websocket.Conn, data []by
 }
 
 func (s *Server) authenticateConnection(ctx context.Context, conn *websocket.Conn, pubKey []byte, displayName string) {
-	// Send auth_ok with user list
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey)
+
+	// Send auth_ok with user list and groups
 	authOK := protocol.AuthOKMsg{
-		Type:  protocol.TypeAuthOK,
-		Users: s.hub.OnlineUsers(),
+		Type:   protocol.TypeAuthOK,
+		Users:  s.hub.OnlineUsers(),
+		Groups: s.hub.UserGroups(pubKeyB64),
 	}
 	data, _ := json.Marshal(authOK)
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {

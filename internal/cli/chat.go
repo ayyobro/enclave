@@ -89,19 +89,26 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// Connect in a background goroutine so the TUI shows the spinner
 	go func() {
 		// Always authenticate (registration happened during 'enclave init')
-		entries, err := appCore.ConnectAndAuth("")
+		result, err := appCore.ConnectAndAuth("")
 		if err != nil {
 			p.Send(tui.DisconnectedMsg{Err: err})
 			p.Send(tui.TUIErrorMsg{Err: fmt.Errorf("connection failed: %w", err)})
 			return
 		}
-		contacts := make([]tui.ContactInfo, len(entries))
-		for i, e := range entries {
-			contacts[i] = tui.ContactInfo{
+		contacts := make([]tui.ContactInfo, 0, len(result.Contacts)+len(result.Groups))
+		for _, e := range result.Contacts {
+			contacts = append(contacts, tui.ContactInfo{
 				PublicKey:   e.PublicKey,
 				DisplayName: e.DisplayName,
 				Online:      e.Online,
-			}
+			})
+		}
+		for _, g := range result.Groups {
+			contacts = append(contacts, tui.ContactInfo{
+				PublicKey:   g.GroupID,
+				DisplayName: g.Name,
+				IsGroup:     true,
+			})
 		}
 		p.Send(tui.ConnectedMsg{Users: contacts})
 	}()

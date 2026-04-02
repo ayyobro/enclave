@@ -74,7 +74,7 @@ func (w *WSClient) Connect(ctx context.Context) error {
 }
 
 // Register sends a registration message and waits for auth_ok.
-func (w *WSClient) Register(ctx context.Context, pubKeyB64, displayName, token string) ([]protocol.UserInfo, error) {
+func (w *WSClient) Register(ctx context.Context, pubKeyB64, displayName, token string) (*protocol.AuthOKMsg, error) {
 	msg := protocol.RegisterMsg{
 		Type:        protocol.TypeRegister,
 		Token:       token,
@@ -90,7 +90,7 @@ func (w *WSClient) Register(ctx context.Context, pubKeyB64, displayName, token s
 }
 
 // Authenticate performs challenge-response auth for an already-registered user.
-func (w *WSClient) Authenticate(ctx context.Context, pubKeyB64 string, solveChallenge func(challengeNonce []byte, serverPubKey []byte) ([]byte, error)) ([]protocol.UserInfo, error) {
+func (w *WSClient) Authenticate(ctx context.Context, pubKeyB64 string, solveChallenge func(challengeNonce []byte, serverPubKey []byte) ([]byte, error)) (*protocol.AuthOKMsg, error) {
 	msg := protocol.AuthMsg{
 		Type:      protocol.TypeAuth,
 		PublicKey: pubKeyB64,
@@ -149,7 +149,7 @@ func (w *WSClient) Authenticate(ctx context.Context, pubKeyB64 string, solveChal
 	return w.readAuthOK(ctx)
 }
 
-func (w *WSClient) readAuthOK(ctx context.Context) ([]protocol.UserInfo, error) {
+func (w *WSClient) readAuthOK(ctx context.Context) (*protocol.AuthOKMsg, error) {
 	_, data, err := w.conn.Read(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading auth response: %w", err)
@@ -175,7 +175,7 @@ func (w *WSClient) readAuthOK(ctx context.Context) ([]protocol.UserInfo, error) 
 		return nil, fmt.Errorf("parsing auth_ok: %w", err)
 	}
 
-	return authOK.Users, nil
+	return &authOK, nil
 }
 
 // Send queues a message to be sent. Returns error if disconnected.
