@@ -117,6 +117,8 @@ func (h *Hub) handleMessage(msg clientMessage) {
 		h.routeDirectRelay(msg, protocol.TypeVibeOutput)
 	case protocol.TypeVibeEnd:
 		h.routeDirectRelay(msg, protocol.TypeVibeEnd)
+	case protocol.TypeVibeStatus:
+		h.routeDirectRelay(msg, protocol.TypeVibeStatus)
 	case protocol.TypeGroupCreate:
 		h.handleGroupCreate(msg)
 	case protocol.TypeGroupInvite:

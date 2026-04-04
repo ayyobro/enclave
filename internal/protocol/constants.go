@@ -23,6 +23,7 @@ const (
 	TypeVibePrompt   = "vibe_prompt"
 	TypeVibeOutput   = "vibe_output"
 	TypeVibeEnd      = "vibe_end"
+	TypeVibeStatus   = "vibe_status"
 	TypeKeyRotate    = "key_rotate"
 
 	// Message types (server -> client)
