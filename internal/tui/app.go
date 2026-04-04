@@ -232,6 +232,31 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, a.waitForMessage()
 
+	case *client.KeyChangedEvent:
+		// Show a prominent security warning
+		warning := fmt.Sprintf(
+			"⚠️  SECURITY NOTICE: %s has changed their encryption key.\n"+
+				"   Old fingerprint: %s\n"+
+				"   This could mean they rotated keys, or someone is impersonating them.\n"+
+				"   Verify their new identity out-of-band before sharing sensitive information.",
+			msg.DisplayName, truncateKey(msg.OldKey),
+		)
+		a.mainView.chatView.AddSystemMessage(warning)
+
+		// Update the sidebar contact key
+		for i := range a.mainView.sidebar.contacts {
+			if a.mainView.sidebar.contacts[i].PublicKey == msg.OldKey {
+				a.mainView.sidebar.contacts[i].PublicKey = msg.NewKey
+				break
+			}
+		}
+
+		// Update active contact if it was the rotated user
+		if a.mainView.ActiveContact() == msg.OldKey {
+			a.mainView.activeContact = msg.NewKey
+		}
+		return a, a.waitForMessage()
+
 	case *client.VibeStartEvent:
 		a.vibeHostKey = msg.From
 		a.vibeConvo = msg.To
@@ -878,6 +903,13 @@ func (a *App) displayReceivedFile(msg *client.FileCompleteEvent) {
 			fmt.Sprintf("📎 Received file from %s: %s (%d bytes)\n   Saved to: %s",
 				msg.FromName, msg.FileName, size, msg.SavedTo))
 	}
+}
+
+func truncateKey(key string) string {
+	if len(key) > 16 {
+		return key[:16] + "..."
+	}
+	return key
 }
 
 func isTextFile(ext string) bool {

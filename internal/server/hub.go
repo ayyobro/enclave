@@ -107,6 +107,8 @@ func (h *Hub) handleMessage(msg clientMessage) {
 		h.routeDirectRelay(msg, protocol.TypeFileChunk)
 	case protocol.TypeEphemeral:
 		h.routeDirectRelay(msg, protocol.TypeEphemeral)
+	case protocol.TypeKeyRotate:
+		h.handleKeyRotate(msg)
 	case protocol.TypeVibeStart:
 		h.routeDirectRelay(msg, protocol.TypeVibeStart)
 	case protocol.TypeVibePrompt:
@@ -419,6 +421,62 @@ func (h *Hub) handleGroupLeave(msg clientMessage) {
 	senderKey := base64.StdEncoding.EncodeToString(msg.client.publicKey)
 	h.store.RemoveGroupMember(leave.GroupID, senderKey)
 	h.logger.Info("user left group", "group", leave.GroupID, "user", senderKey[:12]+"...")
+}
+
+func (h *Hub) handleKeyRotate(msg clientMessage) {
+	var rotate protocol.KeyRotateMsg
+	if err := json.Unmarshal(msg.data, &rotate); err != nil {
+		return
+	}
+
+	senderKey := base64.StdEncoding.EncodeToString(msg.client.publicKey)
+
+	// Verify the sender owns the old key
+	if rotate.OldKey != senderKey {
+		h.logger.Warn("key rotation: sender doesn't match old key")
+		return
+	}
+
+	oldKeyBytes, err := base64.StdEncoding.DecodeString(rotate.OldKey)
+	if err != nil || len(oldKeyBytes) != 32 {
+		return
+	}
+	newKeyBytes, err := base64.StdEncoding.DecodeString(rotate.NewKey)
+	if err != nil || len(newKeyBytes) != 32 {
+		return
+	}
+
+	// Rotate in the store
+	if err := h.store.RotateUserKey(oldKeyBytes, newKeyBytes, msg.client.displayName); err != nil {
+		h.logger.Error("key rotation failed", "error", err)
+		return
+	}
+
+	h.logger.Info("key rotated", "user", msg.client.displayName, "old", senderKey[:12]+"...", "new", rotate.NewKey[:12]+"...")
+
+	// Broadcast key change to all connected clients
+	changed := protocol.KeyChangedMsg{
+		Type:        protocol.TypeKeyChanged,
+		OldKey:      rotate.OldKey,
+		NewKey:      rotate.NewKey,
+		DisplayName: msg.client.displayName,
+	}
+	data, _ := json.Marshal(changed)
+
+	h.mu.RLock()
+	for key, c := range h.clients {
+		if key == senderKey {
+			continue
+		}
+		select {
+		case c.send <- data:
+		default:
+		}
+	}
+	h.mu.RUnlock()
+
+	// Disconnect the old connection — client needs to reconnect with new key
+	h.unregister <- msg.client
 }
 
 func (h *Hub) broadcastPresence(pubKey string, online bool) {

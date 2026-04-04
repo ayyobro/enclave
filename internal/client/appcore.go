@@ -113,6 +113,12 @@ type EphemeralEvent struct {
 	Duration string
 }
 
+type KeyChangedEvent struct {
+	OldKey      string
+	NewKey      string
+	DisplayName string
+}
+
 type VibeStartEvent struct {
 	From     string
 	FromName string
@@ -437,6 +443,8 @@ func (a *AppCore) ProcessIncoming(data []byte) interface{} {
 		return a.processFileChunk(data)
 	case protocol.TypeEphemeral:
 		return a.processEphemeral(data)
+	case protocol.TypeKeyChanged:
+		return a.processKeyChanged(data)
 	case protocol.TypeVibeStart:
 		return a.processVibeStart(data)
 	case protocol.TypeVibePrompt:
@@ -685,6 +693,25 @@ func (a *AppCore) processEphemeral(data []byte) interface{} {
 		From:     msg.From,
 		FromName: fromName,
 		Duration: msg.Duration,
+	}
+}
+
+func (a *AppCore) processKeyChanged(data []byte) interface{} {
+	var msg protocol.KeyChangedMsg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil
+	}
+
+	// Update our contact name mapping
+	if name, ok := a.contactNames[msg.OldKey]; ok {
+		a.contactNames[msg.NewKey] = name
+		delete(a.contactNames, msg.OldKey)
+	}
+
+	return &KeyChangedEvent{
+		OldKey:      msg.OldKey,
+		NewKey:      msg.NewKey,
+		DisplayName: msg.DisplayName,
 	}
 }
 

@@ -50,6 +50,9 @@ type Store interface {
 	CreateUser(publicKey []byte, displayName string) (*User, error)
 	GetUserByKey(publicKey []byte) (*User, error)
 	ListUsers() ([]User, error)
+	RotateUserKey(oldKey, newKey []byte, displayName string) error
+	RevokeUser(publicKey []byte) error
+	IsKeyRevoked(publicKey []byte) (bool, error)
 
 	// Invite tokens
 	CreateInviteToken(tokenHash []byte, maxUses int, expiresAt time.Time) error

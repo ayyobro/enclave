@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -359,6 +360,358 @@ func TestAdminInviteAPI(t *testing.T) {
 		t.Errorf("expected 401 for no auth, got %d", resp3.StatusCode)
 	}
 	t.Log("Missing auth correctly rejected")
+}
+
+// testServer is a helper that starts a server and returns everything needed for testing.
+type testServer struct {
+	store    *SQLiteStore
+	srv      *Server
+	listener net.Listener
+	wsURL    string
+	httpURL  string
+	adminKey string
+}
+
+func newTestServer(t *testing.T) *testServer {
+	t.Helper()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	srv, err := NewServer(store, logger, tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go srv.Run(listener)
+
+	return &testServer{
+		store:    store,
+		srv:      srv,
+		listener: listener,
+		wsURL:    fmt.Sprintf("ws://%s/ws", listener.Addr().String()),
+		httpURL:  fmt.Sprintf("http://%s", listener.Addr().String()),
+		adminKey: srv.AdminKey(),
+	}
+}
+
+func (ts *testServer) cleanup() {
+	ts.listener.Close()
+	ts.store.Close()
+}
+
+func (ts *testServer) generateInvite(t *testing.T) string {
+	t.Helper()
+	token, hash, err := GenerateInviteToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts.store.CreateInviteToken(hash, 1, time.Now().Add(time.Hour))
+	return token
+}
+
+func TestKeyRotation(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	// Register alice
+	alicePub, alicePriv, _ := box.GenerateKey(rand.Reader)
+	token := ts.generateInvite(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	aliceConn := register(t, ctx, ts.wsURL, alicePub, alicePriv, "alice", token)
+	defer aliceConn.Close(websocket.StatusNormalClosure, "")
+
+	// Register bob so he can receive key change notifications
+	bobPub, bobPriv, _ := box.GenerateKey(rand.Reader)
+	token2 := ts.generateInvite(t)
+	bobConn := register(t, ctx, ts.wsURL, bobPub, bobPriv, "bob", token2)
+	defer bobConn.Close(websocket.StatusNormalClosure, "")
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Alice generates a new keypair
+	newAlicePub, _, _ := box.GenerateKey(rand.Reader)
+	oldAlicePubB64 := base64.StdEncoding.EncodeToString(alicePub[:])
+	newAlicePubB64 := base64.StdEncoding.EncodeToString(newAlicePub[:])
+
+	// Alice sends key rotation message
+	rotateMsg := protocol.KeyRotateMsg{
+		Type:   protocol.TypeKeyRotate,
+		OldKey: oldAlicePubB64,
+		NewKey: newAlicePubB64,
+	}
+	data, _ := json.Marshal(rotateMsg)
+	aliceConn.Write(ctx, websocket.MessageText, data)
+	t.Log("Alice sent key rotation")
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Bob should receive a key changed notification
+	_, msgData, err := bobConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("bob reading key change: %v", err)
+	}
+
+	msgType, _ := protocol.ParseType(msgData)
+	// Skip presence messages to find the key change
+	for msgType == protocol.TypePresence {
+		_, msgData, err = bobConn.Read(ctx)
+		if err != nil {
+			t.Fatalf("bob reading: %v", err)
+		}
+		msgType, _ = protocol.ParseType(msgData)
+	}
+
+	if msgType != protocol.TypeKeyChanged {
+		t.Fatalf("expected key_changed, got %s: %s", msgType, string(msgData))
+	}
+
+	var keyChanged protocol.KeyChangedMsg
+	json.Unmarshal(msgData, &keyChanged)
+
+	if keyChanged.OldKey != oldAlicePubB64 {
+		t.Error("old key mismatch in notification")
+	}
+	if keyChanged.NewKey != newAlicePubB64 {
+		t.Error("new key mismatch in notification")
+	}
+	if keyChanged.DisplayName != "alice" {
+		t.Errorf("display name = %q, want alice", keyChanged.DisplayName)
+	}
+	t.Log("Bob received key change notification for alice")
+
+	// Verify old key is revoked in the store
+	revoked, err := ts.store.IsKeyRevoked(alicePub[:])
+	if err != nil {
+		t.Fatalf("checking revocation: %v", err)
+	}
+	if !revoked {
+		t.Error("old key should be revoked after rotation")
+	}
+
+	// Verify new key exists in users table
+	user, err := ts.store.GetUserByKey(newAlicePub[:])
+	if err != nil {
+		t.Fatalf("looking up new key: %v", err)
+	}
+	if user.DisplayName != "alice" {
+		t.Errorf("new user name = %q, want alice", user.DisplayName)
+	}
+
+	t.Log("Key rotation test PASSED")
+}
+
+func TestKeyRevocationAPI(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	// Register alice
+	alicePub, alicePriv, _ := box.GenerateKey(rand.Reader)
+	token := ts.generateInvite(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	aliceConn := register(t, ctx, ts.wsURL, alicePub, alicePriv, "alice", token)
+	defer aliceConn.Close(websocket.StatusNormalClosure, "")
+
+	alicePubB64 := base64.StdEncoding.EncodeToString(alicePub[:])
+
+	// Revoke alice via admin API
+	body, _ := json.Marshal(map[string]string{"public_key": alicePubB64})
+	req, _ := http.NewRequest("POST", ts.httpURL+"/api/revoke", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+ts.adminKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("revoke request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	t.Log("Admin revoked alice's key")
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify key is revoked in store
+	revoked, _ := ts.store.IsKeyRevoked(alicePub[:])
+	if !revoked {
+		t.Error("key should be revoked")
+	}
+
+	// Verify user record is gone
+	_, err = ts.store.GetUserByKey(alicePub[:])
+	if err == nil {
+		t.Error("user should be deleted after revocation")
+	}
+
+	t.Log("Key revocation API test PASSED")
+}
+
+func TestRevokedKeyCannotAuth(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	// Register alice, then revoke her
+	alicePub, alicePriv, _ := box.GenerateKey(rand.Reader)
+	token := ts.generateInvite(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	aliceConn := register(t, ctx, ts.wsURL, alicePub, alicePriv, "alice", token)
+	aliceConn.Close(websocket.StatusNormalClosure, "")
+	time.Sleep(100 * time.Millisecond)
+
+	// Revoke the key directly in the store
+	ts.store.RevokeUser(alicePub[:])
+
+	// Try to authenticate with the revoked key
+	conn, _, err := websocket.Dial(ctx, ts.wsURL, nil)
+	if err != nil {
+		t.Fatalf("dialing: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	authMsg := protocol.AuthMsg{
+		Type:      protocol.TypeAuth,
+		PublicKey: base64.StdEncoding.EncodeToString(alicePub[:]),
+	}
+	data, _ := json.Marshal(authMsg)
+	conn.Write(ctx, websocket.MessageText, data)
+
+	// Should get an error back, not a challenge
+	_, respData, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("reading response: %v", err)
+	}
+
+	msgType, _ := protocol.ParseType(respData)
+	if msgType == protocol.TypeChallenge {
+		t.Fatal("revoked key should NOT receive a challenge")
+	}
+
+	if msgType != protocol.TypeError {
+		t.Fatalf("expected error, got %s: %s", msgType, string(respData))
+	}
+
+	var errMsg protocol.ErrorMsg
+	json.Unmarshal(respData, &errMsg)
+	if errMsg.Code != "key_revoked" {
+		t.Errorf("error code = %q, want key_revoked", errMsg.Code)
+	}
+
+	t.Log("Revoked key correctly rejected on auth")
+}
+
+func TestRevocationAPIBadKey(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	// Try revoking without admin key
+	body, _ := json.Marshal(map[string]string{"public_key": "fakekey"})
+	req, _ := http.NewRequest("POST", ts.httpURL+"/api/revoke", bytes.NewReader(body))
+	resp, _ := http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without auth, got %d", resp.StatusCode)
+	}
+
+	// Try with wrong admin key
+	req2, _ := http.NewRequest("POST", ts.httpURL+"/api/revoke", bytes.NewReader(body))
+	req2.Header.Set("Authorization", "Bearer wrong-key")
+	resp2, _ := http.DefaultClient.Do(req2)
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 with bad key, got %d", resp2.StatusCode)
+	}
+
+	t.Log("Revocation API auth checks PASSED")
+}
+
+func TestKeyRotationPreservesGroupMembership(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.cleanup()
+
+	alicePub, alicePriv, _ := box.GenerateKey(rand.Reader)
+	bobPub, bobPriv, _ := box.GenerateKey(rand.Reader)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tok1 := ts.generateInvite(t)
+	tok2 := ts.generateInvite(t)
+
+	aliceConn := register(t, ctx, ts.wsURL, alicePub, alicePriv, "alice", tok1)
+	defer aliceConn.Close(websocket.StatusNormalClosure, "")
+	bobConn := register(t, ctx, ts.wsURL, bobPub, bobPriv, "bob", tok2)
+	defer bobConn.Close(websocket.StatusNormalClosure, "")
+
+	time.Sleep(100 * time.Millisecond)
+
+	alicePubB64 := base64.StdEncoding.EncodeToString(alicePub[:])
+	bobPubB64 := base64.StdEncoding.EncodeToString(bobPub[:])
+
+	// Create a group with both alice and bob
+	err := ts.store.CreateGroup("g_test", "testgroup", alicePubB64, []string{alicePubB64, bobPubB64})
+	if err != nil {
+		t.Fatalf("creating group: %v", err)
+	}
+
+	// Alice rotates her key
+	newAlicePub, _, _ := box.GenerateKey(rand.Reader)
+	newAlicePubB64 := base64.StdEncoding.EncodeToString(newAlicePub[:])
+
+	rotateMsg := protocol.KeyRotateMsg{
+		Type:   protocol.TypeKeyRotate,
+		OldKey: alicePubB64,
+		NewKey: newAlicePubB64,
+	}
+	data, _ := json.Marshal(rotateMsg)
+	aliceConn.Write(ctx, websocket.MessageText, data)
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Check that the group membership now has the new key
+	members, err := ts.store.GetGroupMembers("g_test")
+	if err != nil {
+		t.Fatalf("getting group members: %v", err)
+	}
+
+	hasNewKey := false
+	hasOldKey := false
+	for _, m := range members {
+		if m == newAlicePubB64 {
+			hasNewKey = true
+		}
+		if m == alicePubB64 {
+			hasOldKey = true
+		}
+	}
+
+	if !hasNewKey {
+		t.Error("group should contain alice's new key")
+	}
+	if hasOldKey {
+		t.Error("group should NOT contain alice's old key")
+	}
+
+	t.Logf("Group members after rotation: %v", members)
+	t.Log("Group membership preserved after key rotation PASSED")
 }
 
 // register connects, sends a register message, receives auth_ok

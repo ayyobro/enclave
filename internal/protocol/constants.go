@@ -23,6 +23,7 @@ const (
 	TypeVibePrompt   = "vibe_prompt"
 	TypeVibeOutput   = "vibe_output"
 	TypeVibeEnd      = "vibe_end"
+	TypeKeyRotate    = "key_rotate"
 
 	// Message types (server -> client)
 	TypeChallenge    = "challenge"
@@ -32,6 +33,7 @@ const (
 	TypeError        = "error"
 	TypeGroupCreated = "group_created"
 	TypeGroupInfo    = "group_info"
+	TypeKeyChanged   = "key_changed"
 
 	// Limits
 	MaxMessageSize  = 64 * 1024        // 64 KB

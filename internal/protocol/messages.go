@@ -221,6 +221,22 @@ type EphemeralMsg struct {
 }
 
 // ErrorMsg is sent by the server to report errors.
+// KeyRotateMsg is sent by a client to rotate their keypair.
+type KeyRotateMsg struct {
+	Type      string `json:"type"`
+	OldKey    string `json:"old_key"`    // base64 old public key
+	NewKey    string `json:"new_key"`    // base64 new public key
+	Signature string `json:"signature"`  // old key signs new key to prove ownership
+}
+
+// KeyChangedMsg is broadcast to notify contacts that a user's key changed.
+type KeyChangedMsg struct {
+	Type        string `json:"type"`
+	OldKey      string `json:"old_key"`
+	NewKey      string `json:"new_key"`
+	DisplayName string `json:"display_name"`
+}
+
 type ErrorMsg struct {
 	Type    string `json:"type"`
 	Code    string `json:"code"`
