@@ -39,6 +39,9 @@ https://github.com/user-attachments/assets/6026aebc-a610-4a26-947b-d703c4f3d75c
 ### Security & Identity
 - **Challenge-response auth** — No passwords; identity is your NaCl keypair
 - **Invite-only access** — Users must receive a one-time token to register
+- **Key rotation** — `enclave rotate-keys` generates a new keypair, revokes the old one on the server, and notifies all contacts of the change
+- **Key revocation** — Admin API endpoint to immediately revoke a compromised key and disconnect the user
+- **Key change warnings** — Contacts see a prominent security notice when someone's key changes, similar to Signal's safety number change
 - **Key verification** — `/verify` shows fingerprints and visual IDs for out-of-band verification
 - **Contact detail overlay** — Full key info with colored visual fingerprint blocks
 - **QR code export** — `enclave export-key --format qr` renders a scannable QR code in the terminal
@@ -278,6 +281,7 @@ Each user:
 | `enclave invite` | Generate an invite token (requires admin key) |
 | `enclave export-key` | Print your public key and fingerprint |
 | `enclave status` | Check connectivity and identity status |
+| `enclave rotate-keys` | Generate new keypair, revoke old key, notify contacts |
 | `enclave version` | Print version |
 
 ### `enclave init` flags
@@ -557,6 +561,50 @@ Enclave uses a three-layer authentication model with no passwords:
 2. **Challenge-response** — On each connection, the server sends a random 32-byte nonce. The client proves identity by encrypting it with their private key and the server's public key (NaCl box). The server verifies using the client's registered public key.
 3. **Admin API key** — A random 32-byte key generated on first server start, required for the `POST /api/invite` endpoint. Stored in `data-dir/admin.key`. Protected by `Authorization: Bearer` header.
 
+## Key Rotation & Revocation
+
+If a key is compromised — or you just want to practice good security hygiene — Enclave supports rotating keys without losing your identity or group memberships.
+
+### Rotating your keys
+
+```bash
+enclave rotate-keys
+```
+
+This:
+1. Generates a new X25519 keypair
+2. Authenticates with the server using your old key
+3. Atomically revokes the old key and registers the new one
+4. Transfers all group memberships to the new key
+5. Redirects any pending offline messages to the new key
+6. Broadcasts a key change notification to all connected users
+7. Saves the new keys to `~/.enclave/`
+
+Your contacts see a security warning:
+```
+⚠️  SECURITY NOTICE: alice has changed their encryption key.
+   Old fingerprint: a3f8c2d109bb4e7a...
+   This could mean they rotated keys, or someone is impersonating them.
+   Verify their new identity out-of-band before sharing sensitive information.
+```
+
+### Revoking a compromised key (admin)
+
+If you need to immediately remove a user (compromised key, departed team member):
+
+```bash
+curl -X POST http://server:9300/api/revoke \
+  -H "Authorization: Bearer <admin-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"public_key": "<base64-public-key>"}'
+```
+
+This immediately:
+- Adds the key to a permanent revocation list
+- Deletes the user record
+- Disconnects the user if they're online
+- Any future auth attempt with that key is rejected
+
 ## Building
 
 ```bash
@@ -599,6 +647,9 @@ goreleaser release --snapshot --clean
 - Server generates ECDSA P-256 self-signed certificates automatically when TLS is enabled
 - Message content is never logged, stored, or accessible server-side
 - Reactions and read receipts are relayed through the server without content inspection
+- Key rotation with atomic revoke-and-reregister; contacts receive key change warnings
+- Admin revocation API for immediate removal of compromised keys
+- Revoked keys are permanently blacklisted and cannot re-authenticate
 
 ## Data
 

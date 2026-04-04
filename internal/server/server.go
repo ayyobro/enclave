@@ -63,6 +63,7 @@ func NewServer(store Store, logger *slog.Logger, dataDir string) (*Server, error
 	s.mux.HandleFunc("/ws", s.handleWebSocket)
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/invite", s.handleCreateInvite)
+	s.mux.HandleFunc("POST /api/revoke", s.handleRevokeUser)
 
 	return s, nil
 }
@@ -210,6 +211,12 @@ func (s *Server) handleAuth(ctx context.Context, conn *websocket.Conn, data []by
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(msg.PublicKey)
 	if err != nil || len(pubKeyBytes) != 32 {
 		s.sendError(ctx, conn, "invalid_key", "invalid public key")
+		return
+	}
+
+	// Check if key has been revoked
+	if revoked, _ := s.store.IsKeyRevoked(pubKeyBytes); revoked {
+		s.sendError(ctx, conn, "key_revoked", "this key has been revoked")
 		return
 	}
 
@@ -367,6 +374,55 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		"token":      token,
 		"max_uses":   req.MaxUses,
 		"expires_at": expiresAt.Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleRevokeUser(w http.ResponseWriter, r *http.Request) {
+	// Validate admin key
+	auth := r.Header.Get("Authorization")
+	if auth == "" || len(auth) < 8 || auth[:7] != "Bearer " {
+		http.Error(w, `{"error":"missing or invalid Authorization header"}`, http.StatusUnauthorized)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(auth[7:]), []byte(s.adminKey)) != 1 {
+		http.Error(w, `{"error":"invalid admin key"}`, http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		PublicKey string `json:"public_key"` // base64
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PublicKey == "" {
+		http.Error(w, `{"error":"public_key is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(req.PublicKey)
+	if err != nil || len(keyBytes) != 32 {
+		http.Error(w, `{"error":"invalid public key"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.RevokeUser(keyBytes); err != nil {
+		s.logger.Error("revoking user", "error", err)
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Disconnect the user if they're currently connected
+	keyB64 := base64.StdEncoding.EncodeToString(keyBytes)
+	s.hub.mu.RLock()
+	if client, ok := s.hub.clients[keyB64]; ok {
+		s.hub.unregister <- client
+	}
+	s.hub.mu.RUnlock()
+
+	s.logger.Info("user revoked via API", "key", req.PublicKey[:12]+"...")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":     "revoked",
+		"public_key": req.PublicKey,
 	})
 }
 

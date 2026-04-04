@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -55,6 +56,12 @@ func (s *SQLiteStore) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_pending_recipient ON pending_messages(recipient_key);
+
+	CREATE TABLE IF NOT EXISTS revoked_keys (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		public_key BLOB NOT NULL UNIQUE,
+		revoked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 
 	CREATE TABLE IF NOT EXISTS groups (
 		id         TEXT PRIMARY KEY,
@@ -200,6 +207,74 @@ func (s *SQLiteStore) GetPendingMessages(recipientKey []byte) ([]PendingMessage,
 func (s *SQLiteStore) DeletePendingMessage(id int64) error {
 	_, err := s.db.Exec("DELETE FROM pending_messages WHERE id = ?", id)
 	return err
+}
+
+func (s *SQLiteStore) RotateUserKey(oldKey, newKey []byte, displayName string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Revoke the old key
+	_, err = tx.Exec("INSERT OR IGNORE INTO revoked_keys (public_key) VALUES (?)", oldKey)
+	if err != nil {
+		return err
+	}
+
+	// Delete old user record
+	_, err = tx.Exec("DELETE FROM users WHERE public_key = ?", oldKey)
+	if err != nil {
+		return err
+	}
+
+	// Create new user record
+	_, err = tx.Exec("INSERT INTO users (public_key, display_name) VALUES (?, ?)", newKey, displayName)
+	if err != nil {
+		return err
+	}
+
+	// Update group memberships from old key to new key
+	oldKeyB64 := base64.StdEncoding.EncodeToString(oldKey)
+	newKeyB64 := base64.StdEncoding.EncodeToString(newKey)
+	_, err = tx.Exec("UPDATE group_members SET public_key = ? WHERE public_key = ?", newKeyB64, oldKeyB64)
+	if err != nil {
+		return err
+	}
+
+	// Move pending messages addressed to old key to new key
+	_, err = tx.Exec("UPDATE pending_messages SET recipient_key = ? WHERE recipient_key = ?", newKey, oldKey)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) RevokeUser(publicKey []byte) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("INSERT OR IGNORE INTO revoked_keys (public_key) VALUES (?)", publicKey)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("DELETE FROM users WHERE public_key = ?", publicKey)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) IsKeyRevoked(publicKey []byte) (bool, error) {
+	var count int
+	err := s.db.QueryRow("SELECT count(*) FROM revoked_keys WHERE public_key = ?", publicKey).Scan(&count)
+	return count > 0, err
 }
 
 func (s *SQLiteStore) CreateGroup(id, name, creatorKey string, memberKeys []string) error {
