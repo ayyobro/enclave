@@ -143,6 +143,11 @@ type VibeEndEvent struct {
 	FromName string
 }
 
+type VibeStatusEvent struct {
+	Status string
+	Detail string
+}
+
 type ContactEntry struct {
 	PublicKey   string
 	DisplayName string
@@ -453,6 +458,8 @@ func (a *AppCore) ProcessIncoming(data []byte) interface{} {
 		return a.processVibeOutput(data)
 	case protocol.TypeVibeEnd:
 		return a.processVibeEnd(data)
+	case protocol.TypeVibeStatus:
+		return a.processVibeStatus(data)
 	case protocol.TypeError:
 		var errMsg protocol.ErrorMsg
 		json.Unmarshal(data, &errMsg)
@@ -755,6 +762,18 @@ func (a *AppCore) processVibeEnd(data []byte) interface{} {
 	}
 	fromName := a.getDisplayName(msg.From)
 	return &VibeEndEvent{From: msg.From, FromName: fromName}
+}
+
+func (a *AppCore) processVibeStatus(data []byte) interface{} {
+	var msg protocol.VibeStatusMsg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil
+	}
+	return &VibeStatusEvent{Status: msg.Status, Detail: msg.Detail}
+}
+
+func (a *AppCore) SendVibeStatus(to, status, detail string) {
+	a.sendJSON(protocol.VibeStatusMsg{Type: protocol.TypeVibeStatus, To: to, Status: status, Detail: detail})
 }
 
 func (a *AppCore) SendVibeStart(to, repoName string) {

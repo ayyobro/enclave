@@ -205,6 +205,15 @@ type VibeOutputMsg struct {
 	IsDone bool   `json:"is_done"`
 }
 
+// VibeStatusMsg informs participants of session state changes.
+type VibeStatusMsg struct {
+	Type   string `json:"type"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to"`
+	Status string `json:"status"` // "running", "idle", "pending", "rejected", "approved"
+	Detail string `json:"detail,omitempty"`
+}
+
 // VibeEndMsg ends a collaborative coding session.
 type VibeEndMsg struct {
 	Type string `json:"type"`

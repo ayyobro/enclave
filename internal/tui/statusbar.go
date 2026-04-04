@@ -9,18 +9,32 @@ import (
 	"enclave/internal/theme"
 )
 
+// VibeStatus tracks the state of a collaborative coding session.
+type VibeStatus int
+
+const (
+	VibeNone     VibeStatus = iota
+	VibeIdle                // session active, waiting for prompts
+	VibeRunning             // claude is processing
+	VibePending             // prompt awaiting host approval
+	VibeWaiting             // participant waiting for host to approve
+)
+
 // StatusBarModel renders the bottom status bar.
 type StatusBarModel struct {
-	connected bool
-	e2e       bool
-	identity  string
-	width     int
+	connected   bool
+	e2e         bool
+	identity    string
+	width       int
+	vibeStatus  VibeStatus
+	vibeRepo    string
+	ephemeralOn bool
 }
 
 func NewStatusBarModel(identity string) StatusBarModel {
 	return StatusBarModel{
 		identity: identity,
-		e2e:      true, // always true when connected
+		e2e:      true,
 	}
 }
 
@@ -30,6 +44,17 @@ func (m *StatusBarModel) SetConnected(c bool) {
 
 func (m *StatusBarModel) SetWidth(w int) {
 	m.width = w
+}
+
+func (m *StatusBarModel) SetVibeStatus(status VibeStatus, repo string) {
+	m.vibeStatus = status
+	if repo != "" {
+		m.vibeRepo = repo
+	}
+}
+
+func (m *StatusBarModel) SetEphemeral(on bool) {
+	m.ephemeralOn = on
 }
 
 func (m StatusBarModel) View() string {
@@ -47,6 +72,31 @@ func (m StatusBarModel) View() string {
 	// E2E status
 	e2eStatus := styles.StatusE2E.Render("E2E ✓")
 
+	// Build left section
+	left := fmt.Sprintf(" %s │ %s", connStatus, e2eStatus)
+
+	// Vibe indicator
+	if m.vibeStatus != VibeNone {
+		vibeStyle := lipgloss.NewStyle().Bold(true)
+		var vibeText string
+		switch m.vibeStatus {
+		case VibeIdle:
+			vibeText = vibeStyle.Foreground(t.Secondary).Render("🎸 vibe: " + m.vibeRepo)
+		case VibeRunning:
+			vibeText = vibeStyle.Foreground(t.Warning).Render("🎸 claude running...")
+		case VibePending:
+			vibeText = vibeStyle.Foreground(t.Warning).Render("🎸 prompt pending [y/n]")
+		case VibeWaiting:
+			vibeText = vibeStyle.Foreground(t.ForegroundDim).Render("🎸 awaiting approval...")
+		}
+		left += " │ " + vibeText
+	}
+
+	// Ephemeral indicator
+	if m.ephemeralOn {
+		left += " │ " + lipgloss.NewStyle().Foreground(t.Warning).Render("⏱ ephemeral")
+	}
+
 	// Keybinding hints
 	hints := []string{
 		styles.HelpKey.Render("↑↓") + styles.HelpDesc.Render(" navigate"),
@@ -55,16 +105,13 @@ func (m StatusBarModel) View() string {
 		styles.HelpKey.Render("?") + styles.HelpDesc.Render(" help"),
 	}
 
-	left := fmt.Sprintf(" %s │ %s", connStatus, e2eStatus)
 	right := strings.Join(hints, "  ") + " "
 
-	// Calculate space for padding
 	bar := lipgloss.NewStyle().
 		Background(t.StatusBar).
 		Foreground(t.StatusBarFg).
 		Width(m.width)
 
-	// Create the bar with left and right sections
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 1

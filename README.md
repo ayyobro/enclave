@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/6026aebc-a610-4a26-947b-d703c4f3d75c
 - **Offline delivery** — Messages queue on the server when recipients are offline
 
 ### Developer Experience
-- **Collaborative AI coding (`/vibe2gether`)** — Start a shared Claude Code session from within the chat. Participants send `@claude` prompts, the host's machine runs them, and output streams to everyone in real-time. Host approves or rejects remote prompts before execution. All communication E2E encrypted
+- **Collaborative AI coding (`/vibe2gether`)** — Start a shared Claude Code session from within the chat. Participants send `@claude` prompts, the host's machine runs them, and output streams to everyone in real-time. Host approves or rejects remote prompts before execution. Status bar shows session state (idle/running/pending) on all sides. `/vibestop` cancels a running prompt. Session summary lists all files touched on `/endvibe`. All communication E2E encrypted
 - **Rich TUI** — Split-pane interface with contacts, chat viewport, input, and status bar
 - **Syntax highlighting** — Fenced code blocks render with full syntax highlighting (200+ languages via Chroma)
 - **Inline code** — Backtick-wrapped `code` renders with a distinct background
@@ -351,8 +351,9 @@ Type `/` in the message input to see all available commands with fuzzy autocompl
 | `/pin` | Pin the last message. Pinned messages show a pin indicator |
 | `/pins` | List all pinned messages in the current conversation |
 | `/ephemeral <duration>` | Enable disappearing messages — both sides are notified and messages are deleted from both databases after the timer. Accepts Go durations: `30s`, `5m`, `1h`. Use `/ephemeral off` to disable |
-| `/vibe2gether <path>` | Start a collaborative Claude Code session on a local repo. Others can send `@claude` prompts. Host approves/rejects remote prompts before execution |
-| `/endvibe` | End the active collaborative coding session |
+| `/vibe2gether <path>` | Start a collaborative Claude Code session on a local repo. Others send `@claude` prompts. Host approves/rejects with `y`/`n`. Status synced to all participants |
+| `/vibestop` | Cancel the currently running Claude prompt without ending the session |
+| `/endvibe` | End the session and show a summary of all files touched |
 | `/export` | Save the current conversation to `~/.enclave/exports/` as a text file |
 | `/quit` | Exit Enclave |
 
@@ -448,8 +449,8 @@ Enclave includes a built-in multiplayer Claude Code experience — the first too
 │  claude code         │          │  @claude add tests   │
 │  (subprocess)        │          │                      │
 │       │              │          │  sees:               │
-│       ▼              │          │  [reading main.go]   │
-│  local git repo      │          │  [writing test.go]   │
+│       ▼              │          │  📖 reading main.go  │
+│  local git repo      │          │  📝 writing test.go  │
 │  (files modified)    │          │  "Here are the tests"│
 └─────────────────────┘          └─────────────────────┘
 ```
@@ -460,8 +461,10 @@ Enclave includes a built-in multiplayer Claude Code experience — the first too
 alice> /vibe2gether ~/projects/my-api
 🎸 Collaborative coding session started on: my-api
    Others can now use @claude <prompt> to send prompts.
-   Use /endvibe to stop.
+   Use /vibestop to cancel a running prompt, /endvibe to stop.
 ```
+
+The status bar shows `🎸 vibe: my-api` for all participants.
 
 Bob sees:
 ```
@@ -477,48 +480,82 @@ Anyone in the conversation can type `@claude` followed by a prompt:
 bob> @claude add a health check endpoint
 ```
 
+Bob's status bar changes to `🎸 awaiting approval...` and he sees:
+```
+⏳ Waiting for host to approve your prompt...
+```
+
 ### Host approval
 
-When a remote participant sends a prompt, the host sees an approval request:
+The host sees an inline approval request — **non-blocking**, so you can still navigate and type:
 
 ```
 🔒 bob wants to run:
    @claude add a health check endpoint
 
-   Press [y] to approve or [n] to reject
+   Type [y] to approve or [n] to reject
 ```
+
+The status bar shows `🎸 prompt pending [y/n]`. Type `y` or `n` when the input box is empty and focused. You can switch panes, scroll history, or type other messages while the prompt waits.
 
 The host's own `@claude` prompts run immediately — no approval needed for your own machine.
 
+On approval, Bob sees: `✅ Host approved. Claude is running...`
+On rejection, Bob sees: `❌ Host rejected the prompt: add a health check endpoint`
+
 ### Output streaming
 
-Once approved, Claude Code runs on the host's machine and output streams to all participants:
+Once approved, Claude Code runs on the host's machine and output streams to all participants with visual formatting:
 
 ```
 claude · 14:32
-[reading main.go]
+📖 reading main.go
 
 claude · 14:32
-[writing internal/health.go]
+📝 writing internal/health.go
+
+claude · 14:32
+⚙️  running: go test ./...
 
 claude · 14:33
 Here's the health check endpoint. I've added...
+
+✅ [claude] Done.
 ```
 
-Tool calls (file reads, edits, bash commands) appear as status lines. The final response appears as a regular chat message with full syntax highlighting.
+The status bar shows `🎸 claude running...` during execution on all sides.
+
+### Cancelling a running prompt
+
+If Claude is doing something unexpected:
+
+```
+alice> /vibestop
+⏹ Cancelled running prompt. Session still active.
+```
+
+This kills the current Claude subprocess but keeps the session alive for new prompts. Participants see `⏹ Host cancelled the running prompt.`
 
 ### Ending a session
 
 ```
 alice> /endvibe
 🎸 Collaborative coding session ended.
+
+   Files touched during this session:
+   • internal/server/auth.go
+   • internal/server/hub.go
+   • internal/server/server_test.go
 ```
+
+The session summary lists every file that was read, edited, or created during the session.
 
 ### Security model
 
 - Claude Code runs **only on the host's machine** — no one else gets shell access
 - All prompts and output flow through Enclave's **E2E encryption**
 - Remote prompts require **explicit host approval** before execution
+- Remote prompts are **sanitized** — invisible characters, control sequences, and flag-injection attempts are stripped, with a warning if anything was removed
 - The server sees nothing — prompts and output are encrypted blobs
 - Host opts in with `--dangerously-skip-permissions` (required for non-interactive Claude Code)
 
